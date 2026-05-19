@@ -1,0 +1,8 @@
+/home/Epic-project/cs4455-epic/cpp-client/CMakeFiles/client_lib.dir
+/home/Epic-project/cs4455-epic/cpp-client/CMakeFiles/epic_client.dir
+/home/Epic-project/cs4455-epic/cpp-client/CMakeFiles/edit_cache.dir
+/home/Epic-project/cs4455-epic/cpp-client/CMakeFiles/rebuild_cache.dir
+/home/Epic-project/cs4455-epic/cpp-client/CMakeFiles/list_install_components.dir
+/home/Epic-project/cs4455-epic/cpp-client/CMakeFiles/install.dir
+/home/Epic-project/cs4455-epic/cpp-client/CMakeFiles/install/local.dir
+/home/Epic-project/cs4455-epic/cpp-client/CMakeFiles/install/strip.dir
