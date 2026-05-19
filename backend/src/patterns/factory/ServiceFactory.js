@@ -64,7 +64,7 @@ class ServiceFactory {
   getBlockchainService() {
     if (!this._cache.has('blockchain')) {
       const hashStrategy = new Keccak256Strategy();
-      this._cache.set('blockchain', new BlockchainService(hashStrategy, eventBus, this._pool));
+      this._cache.set('blockchain', new BlockchainService(hashStrategy, this._eventBus, this._pool));
     }
     return this._cache.get('blockchain');
   }

@@ -7,9 +7,6 @@ const validate = require('../middleware/validate');
  * from the router factory in routes/index.js.
  */
 
-const { Router } = require('express');
-const validate = require('../middleware/validate');
-
 function authRoutes(authController, authMw) {
   const router = Router();
 

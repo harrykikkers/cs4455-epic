@@ -15,7 +15,7 @@ class KeyController {
     }
   };
 
-  getKeys = async (req, res, next) => {
+  getKey = async (req, res, next) => {
     try {
       const keys = await this._keyService.getPublicKeys(req.params.userId);
       res.json({ data: keys });

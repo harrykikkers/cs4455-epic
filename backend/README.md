@@ -22,7 +22,7 @@ Backend server for the CS4455 Epic Project secure messaging application.
 ## Project Structure
 
 ```
-secure-messenger-server/
+backend/
 ├── src/
 │   ├── app.js                  # Entry point — composes and starts the server
 │   ├── config/
