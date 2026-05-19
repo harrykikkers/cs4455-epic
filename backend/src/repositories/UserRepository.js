@@ -19,7 +19,7 @@ class UserRepository {
 
   async findById(userId) {
     const [rows] = await this._pool.execute(
-      'SELECT user_id, username, password_hash, created_at FROM users WHERE user_id = ?',
+      'SELECT user_id, username, password_hash, password_changed_at, created_at FROM users WHERE user_id = ?',
       [userId]
     );
     return rows[0] || null;
@@ -27,7 +27,7 @@ class UserRepository {
 
   async findByUsername(username) {
     const [rows] = await this._pool.execute(
-      'SELECT user_id, username, password_hash, created_at FROM users WHERE username = ?',
+      'SELECT user_id, username, password_hash, password_changed_at, created_at FROM users WHERE username = ?',
       [username]
     );
     return rows[0] || null;
@@ -41,8 +41,10 @@ class UserRepository {
   }
 
   async updatePassword(userId, passwordHash) {
+    // Bumping password_changed_at is what triggers JWT invalidation —
+    // AuthService.verifyToken refuses tokens stamped before this timestamp.
     await this._pool.execute(
-      'UPDATE users SET password_hash = ? WHERE user_id = ?',
+      'UPDATE users SET password_hash = ?, password_changed_at = NOW() WHERE user_id = ?',
       [passwordHash, userId]
     );
   }

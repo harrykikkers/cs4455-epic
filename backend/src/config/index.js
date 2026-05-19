@@ -23,7 +23,10 @@ const config = {
   jwt: {
     // No insecure fallback — bootstrap validates this is set before listen().
     secret: process.env.JWT_SECRET,
-    expiresIn: process.env.JWT_EXPIRES_IN || '24h',
+    // Default matches .env.example. Short-lived tokens keep the
+    // damage window small when password_changed_at invalidation lags
+    // (e.g. read replicas, caches).
+    expiresIn: process.env.JWT_EXPIRES_IN || '1h',
   },
 
   argon2: {
@@ -58,6 +61,21 @@ function validate() {
 
   if (config.env === 'production' && !config.allowedOrigin) {
     errors.push('ALLOWED_ORIGIN must be set in production');
+  }
+
+  // Argon2id parameter floors. OWASP's 2023 minimum recommendation for
+  // Argon2id is m=19 MiB, t=2, p=1 — anything below that and a
+  // misconfigured deployment ships near-instant password hashing.
+  if (config.argon2.memoryCost < 19456) {
+    errors.push(
+      `ARGON2_MEMORY_COST=${config.argon2.memoryCost} KiB is below the OWASP minimum of 19456 (19 MiB)`
+    );
+  }
+  if (config.argon2.timeCost < 2) {
+    errors.push(`ARGON2_TIME_COST=${config.argon2.timeCost} is below the OWASP minimum of 2`);
+  }
+  if (config.argon2.parallelism < 1) {
+    errors.push(`ARGON2_PARALLELISM=${config.argon2.parallelism} must be at least 1`);
   }
 
   if (errors.length) {

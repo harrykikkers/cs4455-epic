@@ -7,7 +7,7 @@ const { UnauthorisedError } = require('../utils/errors');
  * Expects: Authorization: Bearer <token>
  */
 function authMiddleware(authService) {
-  return (req, _res, next) => {
+  return async (req, _res, next) => {
     const header = req.headers.authorization;
     if (!header || !header.startsWith('Bearer ')) {
       return next(new UnauthorisedError('Missing or malformed Authorization header'));
@@ -15,10 +15,14 @@ function authMiddleware(authService) {
 
     const token = header.slice(7);
     try {
-      const decoded = authService.verifyToken(token);
+      const decoded = await authService.verifyToken(token);
       req.user = { id: decoded.sub, username: decoded.username };
       next();
     } catch (err) {
+      // Preserve specific reasons (e.g. "Token invalidated by password change",
+      // "User no longer exists") instead of collapsing them all into a generic
+      // 401 — the JWT library's own errors still get the generic message.
+      if (err instanceof UnauthorisedError) return next(err);
       next(new UnauthorisedError('Invalid or expired token'));
     }
   };

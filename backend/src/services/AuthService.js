@@ -20,14 +20,16 @@ class AuthService {
   }
 
   async register({ username, password }) {
+    // Hash unconditionally before the uniqueness check so register-time
+    // latency doesn't leak whether the username is already taken.
+    const passwordHash = await this._hashStrategy.hash(password);
+
     const existing = await this._userRepo.findByUsername(username);
     if (existing) {
       throw new ConflictError('Username already taken');
     }
 
     const userId = uuidv4();
-    const passwordHash = await this._hashStrategy.hash(password);
-
     await this._userRepo.create({ userId, username, passwordHash });
 
     logger.info(`User registered: ${username}`);
@@ -37,7 +39,11 @@ class AuthService {
   async login({ username, password }) {
     const user = await this._userRepo.findByUsername(username);
     if (!user) {
-      await this._hashStrategy.hash(password);
+      // Burn time so missing-user latency matches verify() latency.
+      // try/catch because argon2.hash throws on empty/non-string input —
+      // without it, a missing user with a malformed password would 500
+      // instead of 401 and leak existence via the status code.
+      try { await this._hashStrategy.hash(password); } catch { /* intentionally ignored */ }
       throw new UnauthorisedError('Invalid username or password');
     }
 
@@ -47,7 +53,15 @@ class AuthService {
     }
 
     const token = jwt.sign(
-      { sub: user.user_id, username: user.username },
+      {
+        sub: user.user_id,
+        username: user.username,
+        // Stamp the token with the password version it was issued against.
+        // verifyToken refuses tokens whose stamp is older than the user's
+        // current password_changed_at — i.e. tokens issued before a password
+        // change are invalidated immediately on next use.
+        pwdChangedAt: pwdChangedAtSeconds(user),
+      },
       config.jwt.secret,
       { expiresIn: config.jwt.expiresIn }
     );
@@ -76,9 +90,30 @@ class AuthService {
     logger.info(`Password changed for user: ${user.username}`);
   }
 
-  verifyToken(token) {
-    return jwt.verify(token, config.jwt.secret);
+  async verifyToken(token) {
+    const decoded = jwt.verify(token, config.jwt.secret);
+
+    // DB-side check: refuse tokens whose pwdChangedAt stamp predates the
+    // user's current password_changed_at. This is what makes a password
+    // change immediately invalidate every outstanding session, instead of
+    // waiting for the token to expire on its own.
+    const user = await this._userRepo.findById(decoded.sub);
+    if (!user) {
+      throw new UnauthorisedError('User no longer exists');
+    }
+    const current = pwdChangedAtSeconds(user);
+    if (!decoded.pwdChangedAt || decoded.pwdChangedAt < current) {
+      throw new UnauthorisedError('Token invalidated by password change');
+    }
+
+    return decoded;
   }
+}
+
+/** Unix-seconds stamp of the user's current password version. */
+function pwdChangedAtSeconds(user) {
+  const dt = user.password_changed_at || user.created_at;
+  return Math.floor(new Date(dt).getTime() / 1000);
 }
 
 module.exports = AuthService;

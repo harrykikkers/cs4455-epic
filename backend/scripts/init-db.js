@@ -20,6 +20,7 @@ async function init() {
       user_id CHAR(36) PRIMARY KEY,
       username VARCHAR(30) NOT NULL UNIQUE,
       password_hash VARCHAR(255) NOT NULL,
+      password_changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`,
 
@@ -75,6 +76,20 @@ async function init() {
 
   for (const sql of tables) {
     await pool.execute(sql);
+  }
+
+  // Backward-compatible migration: add password_changed_at to existing
+  // users tables. MySQL 8 lacks ADD COLUMN IF NOT EXISTS, so we swallow
+  // the duplicate-field error and rethrow anything else.
+  try {
+    await pool.execute(
+      `ALTER TABLE users
+         ADD COLUMN password_changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+         AFTER password_hash`
+    );
+    console.log('Added users.password_changed_at');
+  } catch (err) {
+    if (err.code !== 'ER_DUP_FIELDNAME') throw err;
   }
 
   console.log('Tables created');

@@ -41,6 +41,11 @@ class Argon2Strategy {
     return argon2.hash(password, this.options);
   }
 
+  /**
+   * Constant-time verify. argon2.verify compares the derived hash against
+   * the embedded hash using a constant-time routine inside libargon2, so a
+   * timing side-channel can't reveal how many leading bytes matched.
+   */
   async verify(password, hash) {
     return argon2.verify(hash, password);
   }
@@ -56,6 +61,12 @@ class Keccak256Strategy {
     return keccak256(toUtf8Bytes(data));
   }
 
+  /**
+   * Plain string-equality compare — NOT constant-time. Acceptable here
+   * because both operands are public values (an on-chain hash and a hash
+   * of public content), so there is no timing oracle to protect against.
+   * Do NOT reuse this strategy for password or MAC verification.
+   */
   async verify(data, expectedHash) {
     const computed = await this.hash(data);
     return computed === expectedHash;
