@@ -1,10 +1,7 @@
-// API client: small convenience layer mapping high-level operations to HTTP calls.
-// - Handles JSON serialization and automatic inclusion of the JWT Authorization header
-//   for authenticated endpoints.
-// - Returns raw JSON objects (nlohmann::json) for the caller to interpret.
+// API client: maps application operations to HTTPS calls.
+// All authenticated endpoints automatically receive the JWT Authorization header.
 
 #include "Client/ApiClient.h"
-#include "Client/HttpClient.h"
 #include "Client/JsonHelpers.h"
 #include <stdexcept>
 
@@ -13,35 +10,28 @@ using namespace std;
 namespace Client {
 
 ApiClient::ApiClient(const string& baseUrl)
-    : _baseUrl(baseUrl) {
-}
+    : _http(baseUrl) {}
 
 void ApiClient::setJwtToken(const string& token) {
     _jwtToken = token;
 }
 
-// Register a new user. Returns server JSON response.
+vector<string> ApiClient::authHeaders() const {
+    if (_jwtToken.empty()) throw runtime_error("Not logged in — call login() first");
+    return {"Authorization: Bearer " + _jwtToken};
+}
+
 Json ApiClient::registerUser(const string& username,
                               const string& email,
                               const string& password) {
-    HttpClient client(_baseUrl);
-    Json payload = {
-        {"username", username},
-        {"email", email},
-        {"password", password}
-    };
-    string response = client.postJson("/api/auth/register", JsonHelpers::toString(payload));
-    return JsonHelpers::fromString(response);
+    Json payload = {{"username", username}, {"email", email}, {"password", password}};
+    return JsonHelpers::fromString(
+        _http.postJson("/api/auth/register", JsonHelpers::toString(payload)));
 }
 
-// Login and capture JWT token if returned under `data.token`.
 Json ApiClient::login(const string& username, const string& password) {
-    HttpClient client(_baseUrl);
-    Json payload = {
-        {"username", username},
-        {"password", password}
-    };
-    string response = client.postJson("/api/auth/login", JsonHelpers::toString(payload));
+    Json payload = {{"username", username}, {"password", password}};
+    string response = _http.postJson("/api/auth/login", JsonHelpers::toString(payload));
     Json result = JsonHelpers::fromString(response);
     if (result.contains("data") && result["data"].contains("token")) {
         setJwtToken(result["data"]["token"].get<string>());
@@ -50,118 +40,66 @@ Json ApiClient::login(const string& username, const string& password) {
 }
 
 Json ApiClient::getMe() {
-    HttpClient client(_baseUrl);
+    // getMe is callable before login (returns 401 from server if not authed)
     vector<string> headers;
-    if (!_jwtToken.empty()) {
-        headers.push_back("Authorization: Bearer " + _jwtToken);
-    }
-    string response = client.get("/api/auth/me", headers);
-    return JsonHelpers::fromString(response);
+    if (!_jwtToken.empty()) headers.push_back("Authorization: Bearer " + _jwtToken);
+    return JsonHelpers::fromString(_http.get("/api/auth/me", headers));
 }
 
 Json ApiClient::publishPublicKey(const string& publicKeyBase64, const string& keyType) {
-    if (_jwtToken.empty()) {
-        throw runtime_error("JWT token required for publishPublicKey");
-    }
-    HttpClient client(_baseUrl);
-    Json payload = {
-        {"publicKey", publicKeyBase64},
-        {"keyType", keyType}
-    };
-    vector<string> headers = {"Authorization: Bearer " + _jwtToken};
-    string response = client.postJson("/api/keys", JsonHelpers::toString(payload), headers);
-    return JsonHelpers::fromString(response);
+    Json payload = {{"publicKey", publicKeyBase64}, {"keyType", keyType}};
+    return JsonHelpers::fromString(
+        _http.postJson("/api/keys", JsonHelpers::toString(payload), authHeaders()));
 }
 
-// Send an already-encrypted message (ciphertext + nonce + sender public key).
-Json ApiClient::sendEncryptedMessage(const string& recipientId,
-                                      const string& ciphertext,
-                                      const string& nonce,
-                                      const string& senderPublicKey) {
-    if (_jwtToken.empty()) {
-        throw runtime_error("JWT token required for sendEncryptedMessage");
-    }
-    HttpClient client(_baseUrl);
-    Json payload = {
-        {"recipientId", recipientId},
-        {"ciphertext", ciphertext},
-        {"nonce", nonce},
-        {"senderPublicKey", senderPublicKey}
-    };
-    vector<string> headers = {"Authorization: Bearer " + _jwtToken};
-    string response = client.postJson("/api/messages", JsonHelpers::toString(payload), headers);
-    return JsonHelpers::fromString(response);
+Json ApiClient::sendEncryptedMessage(const string& recipientId, const string& ciphertext,
+                                      const string& nonce, const string& senderPublicKey) {
+    Json payload = {{"recipientId", recipientId}, {"ciphertext", ciphertext},
+                    {"nonce", nonce}, {"senderPublicKey", senderPublicKey}};
+    return JsonHelpers::fromString(
+        _http.postJson("/api/messages", JsonHelpers::toString(payload), authHeaders()));
 }
 
 Json ApiClient::getInbox(int limit, int offset) {
-    if (_jwtToken.empty()) {
-        throw runtime_error("JWT token required for getInbox");
-    }
-    HttpClient client(_baseUrl);
-    vector<string> headers = {"Authorization: Bearer " + _jwtToken};
-    string response = client.get("/api/messages/inbox?limit=" + to_string(limit) + "&offset=" + to_string(offset), headers);
-    return JsonHelpers::fromString(response);
+    return JsonHelpers::fromString(
+        _http.get("/api/messages/inbox?limit=" + to_string(limit) +
+                  "&offset=" + to_string(offset), authHeaders()));
 }
 
 Json ApiClient::getSent(int limit, int offset) {
-    if (_jwtToken.empty()) {
-        throw runtime_error("JWT token required for getSent");
-    }
-    HttpClient client(_baseUrl);
-    vector<string> headers = {"Authorization: Bearer " + _jwtToken};
-    string response = client.get("/api/messages/sent?limit=" + to_string(limit) + "&offset=" + to_string(offset), headers);
-    return JsonHelpers::fromString(response);
+    return JsonHelpers::fromString(
+        _http.get("/api/messages/sent?limit=" + to_string(limit) +
+                  "&offset=" + to_string(offset), authHeaders()));
 }
 
 Json ApiClient::getMessage(const string& messageId) {
-    if (_jwtToken.empty()) {
-        throw runtime_error("JWT token required for getMessage");
-    }
-    HttpClient client(_baseUrl);
-    vector<string> headers = {"Authorization: Bearer " + _jwtToken};
-    string response = client.get("/api/messages/" + messageId, headers);
-    return JsonHelpers::fromString(response);
+    return JsonHelpers::fromString(_http.get("/api/messages/" + messageId, authHeaders()));
 }
 
 Json ApiClient::getPublicKey(const string& userId) {
-    HttpClient client(_baseUrl);
+    // Public key lookup works unauthenticated, but attach token if we have one.
     vector<string> headers;
-    if (!_jwtToken.empty()) {
-        headers.push_back("Authorization: Bearer " + _jwtToken);
-    }
-    string response = client.get("/api/keys/" + userId, headers);
-    return JsonHelpers::fromString(response);
+    if (!_jwtToken.empty()) headers.push_back("Authorization: Bearer " + _jwtToken);
+    return JsonHelpers::fromString(_http.get("/api/keys/" + userId, headers));
 }
 
-Json ApiClient::forwardMessage(const string& messageId,
-                               const string& recipientId,
-                               const string& ciphertext,
-                               const string& nonce) {
-    if (_jwtToken.empty()) {
-        throw runtime_error("JWT token required for forwardMessage");
-    }
-    HttpClient client(_baseUrl);
-    Json payload = {
-        {"recipientId", recipientId},
-        {"ciphertext", ciphertext},
-        {"nonce", nonce}
-    };
-    vector<string> headers = {"Authorization: Bearer " + _jwtToken};
-    string response = client.postJson("/api/messages/" + messageId + "/forward", JsonHelpers::toString(payload), headers);
-    return JsonHelpers::fromString(response);
+Json ApiClient::forwardMessage(const string& messageId, const string& recipientId,
+                               const string& ciphertext, const string& nonce) {
+    Json payload = {{"recipientId", recipientId}, {"ciphertext", ciphertext}, {"nonce", nonce}};
+    return JsonHelpers::fromString(
+        _http.postJson("/api/messages/" + messageId + "/forward",
+                       JsonHelpers::toString(payload), authHeaders()));
 }
 
 Json ApiClient::revokeAccess(const string& messageId, const string& targetUserId) {
-    if (_jwtToken.empty()) {
-        throw runtime_error("JWT token required for revokeAccess");
-    }
-    HttpClient client(_baseUrl);
-    Json payload = {
-        {"userId", targetUserId}
-    };
-    vector<string> headers = {"Authorization: Bearer " + _jwtToken};
-    string response = client.postJson("/api/messages/" + messageId + "/revoke", JsonHelpers::toString(payload), headers);
-    return JsonHelpers::fromString(response);
+    Json payload = {{"userId", targetUserId}};
+    return JsonHelpers::fromString(
+        _http.postJson("/api/messages/" + messageId + "/revoke",
+                       JsonHelpers::toString(payload), authHeaders()));
+}
+
+Json ApiClient::deleteMessage(const string& messageId) {
+    return JsonHelpers::fromString(_http.del("/api/messages/" + messageId, authHeaders()));
 }
 
 } // namespace Client

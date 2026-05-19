@@ -1,31 +1,29 @@
 #pragma once
 
 #include <string>
-#include <optional>
 #include <vector>
+#include "HttpClient.h"
 #include "JsonHelpers.h"
 
-using std::string;
-using std::vector;
+using namespace std;
 
 namespace Client {
 
-// Convenience API client that maps application operations to HTTP endpoints.
-// - Keeps JSON (de)serialization in one place and automatically sets the
-//   `Authorization: Bearer <token>` header for authenticated calls.
-// - Returns `Json` objects for the caller to inspect; callers should handle
-//   application-level errors according to server responses.
+// Maps application operations to HTTPS endpoints.
+// Owns one HttpClient and automatically attaches the JWT Authorization header
+// to every authenticated call.
 class ApiClient {
 public:
-    ApiClient(const string& baseUrl);
+    explicit ApiClient(const string& baseUrl);
 
-    // Set the JWT token obtained from login so subsequent calls are authenticated.
     void setJwtToken(const string& token);
 
-    Json registerUser(const string& username, const string& email, const string& password);
+    Json registerUser(const string& username, const string& email,
+                      const string& password);
     Json login(const string& username, const string& password);
     Json getMe();
-    Json publishPublicKey(const string& publicKeyBase64, const string& keyType = "x25519");
+    Json publishPublicKey(const string& publicKeyBase64,
+                          const string& keyType = "x25519");
     Json sendEncryptedMessage(const string& recipientId,
                               const string& ciphertext,
                               const string& nonce,
@@ -38,11 +36,15 @@ public:
                         const string& recipientId,
                         const string& ciphertext,
                         const string& nonce);
-    Json revokeAccess(const string& messageId, const string& targetUserId);
+    Json revokeAccess(const string& messageId,
+                      const string& targetUserId);
+    Json deleteMessage(const string& messageId);
 
 private:
-    string _baseUrl;
+    vector<string> authHeaders() const;
+
     string _jwtToken;
+    HttpClient _http;
 };
 
 } // namespace Client

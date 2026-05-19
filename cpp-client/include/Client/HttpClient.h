@@ -3,32 +3,31 @@
 #include <string>
 #include <vector>
 
-using std::string;
-using std::vector;
+using namespace std;
 
 namespace Client {
 
 // Small HTTPS helper wrapping libcurl.
-// - Basic POST/GET helpers returning raw response bodies.
-// - Callers should provide `Authorization` header when required.
+// SSL certificate verification is automatically disabled when connecting to
+// localhost or 127.0.0.1, so self-signed dev certs work out of the box.
 class HttpClient {
 public:
-    // Construct with API base URL, e.g. "https://api.example.com"
-    HttpClient(const string& baseUrl);
+    explicit HttpClient(const string& baseUrl);
     ~HttpClient();
 
-    // Send JSON via POST. `headers` may include authorization or other custom headers.
-    string postJson(const string& path, const string& jsonBody, const vector<string>& headers = {});
+    string postJson(const string& path, const string& jsonBody,
+                    const vector<string>& headers = {});
+    string get(const string& path,
+               const vector<string>& headers = {});
+    string del(const string& path,
+               const vector<string>& headers = {});
 
-    // Simple GET helper. Returns raw response body.
-    string get(const string& path, const vector<string>& headers = {});
-
-    // Adjust request timeout (seconds)
     void setTimeout(long seconds);
 
 private:
     string _baseUrl;
     long _timeoutSeconds;
+    bool _verifySsl;
 };
 
 } // namespace Client
