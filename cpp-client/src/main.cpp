@@ -13,13 +13,18 @@ using namespace std;
 using namespace Client;
 namespace fs = filesystem;
 
+// RAII guard — the constructor runs setup, the destructor runs cleanup automatically.
+// In Python terms: like a "with" block. curl_global_cleanup() is guaranteed to run
+// even if an exception is thrown, because C++ always calls destructors on scope exit.
 struct CurlGuard {
     CurlGuard()  { curl_global_init(CURL_GLOBAL_DEFAULT); }
     ~CurlGuard() { curl_global_cleanup(); }
 };
 
-// Zeros a string's memory on destruction — guarantees the secret key is wiped
-// even if an exception unwinds the stack before the end of main's try block.
+// Same RAII pattern — destructor overwrites the secret key's memory with zeroes
+// the moment this struct goes out of scope. Needed because C++ strings sit in heap
+// memory that could be read by another process after deallocation if not wiped.
+// Python's garbage collector handles this automatically; C++ does not.
 struct ZeroOnExit {
     string& s;
     ~ZeroOnExit() { if (!s.empty()) sodium_memzero(s.data(), s.size()); }

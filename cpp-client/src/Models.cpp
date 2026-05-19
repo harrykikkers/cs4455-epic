@@ -37,14 +37,14 @@ vector<Message> MessageStore::inbox(const string& myUserId) const {
     return result;
 }
 
-vector<Conversation> MessageStore::conversations(const string& myUserId) const {
+vector<Conversation> MessageStore::conversations(const string&) const {
     map<string, Conversation> convMap;
+    // Every message in the store is already for the current user (loaded from inbox),
+    // so no recipient filter is needed.
     for (const auto& m : _messages) {
-        if (m.recipientId == myUserId) {
-            auto& conv = convMap[m.senderId];
-            conv.peerId = m.senderId;
-            conv.messages.push_back(m);
-        }
+        auto& conv = convMap[m.senderId];
+        conv.peerId = m.senderId;
+        conv.messages.push_back(m);
     }
     vector<Conversation> result;
     for (auto& [peerId, conv] : convMap) {
@@ -59,6 +59,9 @@ vector<Conversation> MessageStore::conversations(const string& myUserId) const {
 const Message* MessageStore::findById(const string& id) const {
     auto it = find_if(_messages.begin(), _messages.end(),
                       [&](const Message& m) { return m.id == id; });
+    // In Python this would return the item or None.
+    // Here: &*it converts the iterator to a pointer (& = address-of, * = dereference),
+    // and nullptr is C++'s equivalent of None.
     return it != _messages.end() ? &*it : nullptr;
 }
 
