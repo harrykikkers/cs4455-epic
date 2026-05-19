@@ -1,5 +1,5 @@
 const { Argon2Strategy, Keccak256Strategy } = require('../strategy/HashStrategy');
-const eventBus = require('../observer/EventBus');
+const defaultEventBus = require('../observer/EventBus');
 
 const UserRepository = require('../../repositories/UserRepository');
 const MessageRepository = require('../../repositories/MessageRepository');
@@ -23,9 +23,22 @@ const KeyService = require('../../services/KeyService');
  * The factory also makes it trivial to swap in mock dependencies for testing.
  */
 class ServiceFactory {
-  constructor(dbPool) {
+  constructor(dbPool, eventBus = defaultEventBus) {
     this._pool = dbPool;
+    this._eventBus = eventBus;
     this._cache = new Map();
+  }
+
+  /**
+   * Lazily constructs and caches MessageRepository — MessageService and
+   * BlockchainService both depend on it, and they need the same instance
+   * so writes from the blockchain observer affect the same pool.
+   */
+  _messageRepo() {
+    if (!this._cache.has('messageRepo')) {
+      this._cache.set('messageRepo', new MessageRepository(this._pool));
+    }
+    return this._cache.get('messageRepo');
   }
 
   /**
@@ -43,8 +56,7 @@ class ServiceFactory {
 
   getMessageService() {
     if (!this._cache.has('message')) {
-      const messageRepo = new MessageRepository(this._pool);
-      this._cache.set('message', new MessageService(messageRepo, eventBus));
+      this._cache.set('message', new MessageService(this._messageRepo(), this._eventBus));
     }
     return this._cache.get('message');
   }
@@ -52,7 +64,10 @@ class ServiceFactory {
   getBlockchainService() {
     if (!this._cache.has('blockchain')) {
       const hashStrategy = new Keccak256Strategy();
-      this._cache.set('blockchain', new BlockchainService(hashStrategy, eventBus));
+      this._cache.set(
+        'blockchain',
+        new BlockchainService(hashStrategy, this._eventBus, this._messageRepo())
+      );
     }
     return this._cache.get('blockchain');
   }

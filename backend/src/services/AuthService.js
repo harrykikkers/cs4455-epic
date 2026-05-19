@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../config');
 const { ConflictError, UnauthorisedError } = require('../utils/errors');
-const logger = require('../utils/logger');
+const logger = require('../utils/logger').child({ component: 'auth' });
 
 /**
  * AuthService handles registration and login.
@@ -19,16 +19,28 @@ class AuthService {
   }
 
   async register({ username, email, password }) {
-    // Check for existing user (prevents enumeration via timing — both paths hash)
-    const existing = await this._userRepo.findByUsername(username);
-    if (existing) {
-      throw new ConflictError('Username already taken');
-    }
-
-    const id = uuidv4();
+    // Hash first so all branches incur the same cost — keeps timing flat
+    // regardless of whether the username/email is taken.
     const passwordHash = await this._hashStrategy.hash(password);
 
-    await this._userRepo.create({ id, username, email, passwordHash });
+    const [existingUsername, existingEmail] = await Promise.all([
+      this._userRepo.findByUsername(username),
+      this._userRepo.findByEmail(email),
+    ]);
+    if (existingUsername) throw new ConflictError('Username already taken');
+    if (existingEmail) throw new ConflictError('Email already registered');
+
+    const id = uuidv4();
+    try {
+      await this._userRepo.create({ id, username, email, passwordHash });
+    } catch (err) {
+      // Race window between the check above and INSERT — let the unique
+      // index do its job and translate the driver error.
+      if (err && err.code === 'ER_DUP_ENTRY') {
+        throw new ConflictError('Username or email already registered');
+      }
+      throw err;
+    }
 
     logger.info(`User registered: ${username}`);
     return { id, username, email };
@@ -42,7 +54,13 @@ class AuthService {
       throw new UnauthorisedError('Invalid username or password');
     }
 
-    const valid = await this._hashStrategy.verify(password, user.password_hash);
+    let valid = false;
+    try {
+      valid = await this._hashStrategy.verify(password, user.password_hash);
+    } catch {
+      // Corrupted or malformed hash — treat as failed auth, not a 500
+      valid = false;
+    }
     if (!valid) {
       throw new UnauthorisedError('Invalid username or password');
     }
@@ -58,6 +76,18 @@ class AuthService {
       token,
       user: { id: user.id, username: user.username, email: user.email },
     };
+  }
+
+  /**
+   * Fetches the live user record so /api/auth/me reflects DB state
+   * (deletes, renames) rather than the JWT claims at issue time.
+   */
+  async getUser(userId) {
+    const user = await this._userRepo.findById(userId);
+    if (!user) {
+      throw new UnauthorisedError('User no longer exists');
+    }
+    return { id: user.id, username: user.username, email: user.email };
   }
 
   verifyToken(token) {

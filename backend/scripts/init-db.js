@@ -5,7 +5,7 @@
  * Uses parameterised DDL — no user input in these queries.
  */
 const { getPool } = require('../src/config/database');
-const logger = require('../src/utils/logger');
+const logger = require('../src/utils/logger').child({ component: 'init' });
 
 const TABLES = [
   `CREATE TABLE IF NOT EXISTS users (

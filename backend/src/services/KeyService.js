@@ -1,5 +1,5 @@
 const { ConflictError, NotFoundError } = require('../utils/errors');
-const logger = require('../utils/logger');
+const logger = require('../utils/logger').child({ component: 'key' });
 
 /**
  * KeyService — manages public key storage and retrieval.
@@ -16,15 +16,21 @@ class KeyService {
 
   async publishKey({ userId, publicKey, keyType = 'x25519' }) {
     const existing = await this._keyRepo.getPublicKey(userId);
+    const rotated = !!(existing && existing.public_key !== publicKey);
 
-    if (existing && existing.public_key !== publicKey) {
+    if (rotated) {
       logger.warn(`Key rotation detected for user ${userId}`);
-      // Store the new key but flag that it was rotated
-      // Clients should warn users about key changes (TOFU model)
     }
 
     await this._keyRepo.storePublicKey({ userId, publicKey, keyType });
     logger.info(`Public key published for user ${userId}`);
+
+    // Surface rotation back to the caller so the client can re-pin or
+    // warn the user (TOFU model — analogous to SSH known_hosts).
+    return {
+      rotated,
+      previousKey: rotated ? existing.public_key : null,
+    };
   }
 
   async getPublicKey(userId) {

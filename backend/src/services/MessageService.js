@@ -1,6 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { NotFoundError, ForbiddenError } = require('../utils/errors');
-const logger = require('../utils/logger');
+const logger = require('../utils/logger').child({ component: 'message' });
 
 /**
  * MessageService — orchestrates message operations.
@@ -45,26 +45,37 @@ class MessageService {
     return this._messageRepo.findBySender(userId, options);
   }
 
-  async getMessage(messageId, userId) {
+  /**
+   * Loads a message and verifies the caller may read it. Returns the row.
+   * Throws NotFoundError / ForbiddenError so callers don't have to repeat
+   * the access logic.
+   */
+  async _assertAccess(messageId, userId) {
     const message = await this._messageRepo.findById(messageId);
     if (!message) {
       throw new NotFoundError('Message not found');
     }
 
-    // Access control — only sender or recipient can view
-    if (message.sender_id !== userId && message.recipient_id !== userId) {
-      // Check if it was shared with this user
-      const shares = await this._messageRepo.findSharedWith(messageId);
-      const isShared = shares.some((s) => s.shared_with_id === userId);
-      if (!isShared) {
-        throw new ForbiddenError('You do not have access to this message');
-      }
+    if (message.sender_id === userId || message.recipient_id === userId) {
+      return message;
     }
 
-    return message;
+    const shares = await this._messageRepo.findSharedWith(messageId);
+    if (shares.some((s) => s.shared_with_id === userId)) {
+      return message;
+    }
+
+    throw new ForbiddenError('You do not have access to this message');
+  }
+
+  async getMessage(messageId, userId) {
+    return this._assertAccess(messageId, userId);
   }
 
   async forwardMessage({ messageId, forwarderId, recipientId, ciphertext, nonce }) {
+    // Authorise: only sender, recipient, or an existing sharee may forward.
+    await this._assertAccess(messageId, forwarderId);
+
     const id = uuidv4();
 
     await this._messageRepo.createShare({

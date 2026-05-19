@@ -1,6 +1,6 @@
 const mysql = require('mysql2/promise');
 const config = require('./index');
-const logger = require('../utils/logger');
+const logger = require('../utils/logger').child({ component: 'db' });
 
 /**
  * Singleton pattern — one connection pool for the entire process.

@@ -1,4 +1,4 @@
-const logger = require('../utils/logger');
+const logger = require('../utils/logger').child({ component: 'http' });
 const { AppError } = require('../utils/errors');
 
 /**
@@ -18,7 +18,7 @@ function errorHandler(err, _req, res, _next) {
     });
   }
 
-  // Validation errors from express-validator
+  // Malformed JSON from express.json body parser
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({
       error: {

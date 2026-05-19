@@ -5,9 +5,14 @@ class MessageController {
 
   send = async (req, res, next) => {
     try {
+      // Destructure explicitly so a client can't override senderId via the body.
+      const { recipientId, ciphertext, nonce, senderPublicKey } = req.body;
       const result = await this._messageService.sendMessage({
         senderId: req.user.id,
-        ...req.body,
+        recipientId,
+        ciphertext,
+        nonce,
+        senderPublicKey,
       });
       res.status(201).json({ data: result });
     } catch (err) {
@@ -50,10 +55,13 @@ class MessageController {
 
   forward = async (req, res, next) => {
     try {
+      const { recipientId, ciphertext, nonce } = req.body;
       const result = await this._messageService.forwardMessage({
         messageId: req.params.id,
         forwarderId: req.user.id,
-        ...req.body,
+        recipientId,
+        ciphertext,
+        nonce,
       });
       res.status(201).json({ data: result });
     } catch (err) {

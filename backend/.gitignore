@@ -1,6 +1,7 @@
 node_modules/
 .env
 certs/
+logs/
 *.log
 coverage/
 

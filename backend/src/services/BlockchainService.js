@@ -1,6 +1,6 @@
 const { ethers } = require('ethers');
 const config = require('../config');
-const logger = require('../utils/logger');
+const logger = require('../utils/logger').child({ component: 'blockchain' });
 
 // Minimal ABI — only the functions our server calls
 const CONTRACT_ABI = [
@@ -16,18 +16,23 @@ const CONTRACT_ABI = [
  * so it runs automatically whenever a message is sent, without the
  * MessageService knowing about blockchain at all.
  *
- * Uses the Keccak256Strategy (Strategy pattern) for hashing.
+ * Uses the Keccak256Strategy (Strategy pattern) for hashing. The
+ * MessageRepository dependency exists so we can write the transaction
+ * hash back to the messages row after a successful chain write.
  */
 class BlockchainService {
-  constructor(hashStrategy, eventBus) {
+  constructor(hashStrategy, eventBus, messageRepository) {
     this._hashStrategy = hashStrategy;
+    this._messageRepo = messageRepository;
     this._provider = null;
     this._wallet = null;
     this._contract = null;
 
-    // Subscribe to message events
+    // Subscribe to message events. Sent and forwarded are handled
+    // separately because only 'sent' has a row to update on the
+    // messages table — forwards are tracked in message_shares.
     eventBus.on('message:sent', (payload) => this._onMessageSent(payload));
-    eventBus.on('message:forwarded', (payload) => this._onMessageSent(payload));
+    eventBus.on('message:forwarded', (payload) => this._onMessageForwarded(payload));
   }
 
   /**
@@ -52,15 +57,34 @@ class BlockchainService {
   }
 
   /**
-   * Observer handler — called when a message is sent.
+   * Observer handler — called when a new message is sent.
+   * Writes the digest on-chain and persists the tx hash on the row.
    */
-  async _onMessageSent({ messageId, ciphertext, timestamp }) {
+  async _onMessageSent({ messageId, ciphertext }) {
     try {
       const txHash = await this.recordDigest(ciphertext);
+      if (!txHash) return; // chain not configured — already logged
+      await this._messageRepo.updateTxHash(messageId, txHash);
       logger.info(`Blockchain digest recorded for message ${messageId}: ${txHash}`);
     } catch (err) {
       // Log but don't fail — blockchain is best-effort
       logger.error(`Blockchain write failed for message ${messageId}:`, err);
+    }
+  }
+
+  /**
+   * Observer handler — called when a message is forwarded (re-encrypted
+   * for a new recipient). The original messages.tx_hash should NOT be
+   * overwritten with the forward's digest; the forward gets its own
+   * on-chain record but no DB write-back today.
+   */
+  async _onMessageForwarded({ shareId, ciphertext }) {
+    try {
+      const txHash = await this.recordDigest(ciphertext);
+      if (!txHash) return;
+      logger.info(`Blockchain digest recorded for share ${shareId}: ${txHash}`);
+    } catch (err) {
+      logger.error(`Blockchain write failed for share ${shareId}:`, err);
     }
   }
 

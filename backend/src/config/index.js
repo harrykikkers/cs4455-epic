@@ -21,7 +21,8 @@ const config = {
   },
 
   jwt: {
-    secret: process.env.JWT_SECRET || 'CHANGE_ME',
+    // No insecure fallback — bootstrap validates this is set before listen().
+    secret: process.env.JWT_SECRET,
     expiresIn: process.env.JWT_EXPIRES_IN || '24h',
   },
 
@@ -37,10 +38,32 @@ const config = {
     contractAddress: process.env.CONTRACT_ADDRESS || '',
   },
 
-  tls: {
-    certPath: process.env.TLS_CERT_PATH || '',
-    keyPath: process.env.TLS_KEY_PATH || '',
+  allowedOrigin: process.env.ALLOWED_ORIGIN || '',
+
+  logging: {
+    errorLogPath: process.env.ERROR_LOG_PATH || 'logs/error.log',
   },
 };
 
+/**
+ * Fail-loud validation. Called once from bootstrap so that one-off scripts
+ * like `db:init` can still load config without requiring a JWT secret.
+ */
+function validate() {
+  const errors = [];
+
+  if (!config.jwt.secret || config.jwt.secret.length < 32) {
+    errors.push('JWT_SECRET must be set and at least 32 characters long');
+  }
+
+  if (config.env === 'production' && !config.allowedOrigin) {
+    errors.push('ALLOWED_ORIGIN must be set in production');
+  }
+
+  if (errors.length) {
+    throw new Error(`Invalid configuration:\n  - ${errors.join('\n  - ')}`);
+  }
+}
+
 module.exports = config;
+module.exports.validate = validate;

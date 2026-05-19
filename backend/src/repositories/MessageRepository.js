@@ -87,6 +87,13 @@ class MessageRepository {
       [messageId, sharedWithId]
     );
   }
+
+  async updateTxHash(messageId, txHash) {
+    await this._pool.execute(
+      'UPDATE messages SET tx_hash = ? WHERE id = ?',
+      [txHash, messageId]
+    );
+  }
 }
 
 module.exports = MessageRepository;

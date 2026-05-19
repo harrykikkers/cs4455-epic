@@ -26,9 +26,15 @@ class AuthController {
     }
   };
 
-  me = async (req, res) => {
-    // req.user is set by auth middleware
-    res.json({ data: req.user });
+  me = async (req, res, next) => {
+    try {
+      // Round-trip to the DB so the response reflects the current row,
+      // not the JWT claims at issue time (handles rename/delete).
+      const user = await this._authService.getUser(req.user.id);
+      res.json({ data: user });
+    } catch (err) {
+      next(err);
+    }
   };
 }
 
