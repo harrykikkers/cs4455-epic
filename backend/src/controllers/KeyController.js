@@ -5,28 +5,20 @@ class KeyController {
 
   publish = async (req, res, next) => {
     try {
-      const { publicKey, keyType } = req.body;
-      const result = await this._keyService.publishKey({
+      await this._keyService.publishKey({
         userId: req.user.id,
-        publicKey,
-        keyType,
+        ...req.body,
       });
-      res.status(201).json({
-        data: {
-          message: result.rotated ? 'Public key rotated' : 'Public key published',
-          rotated: result.rotated,
-          previousKey: result.previousKey,
-        },
-      });
+      res.status(201).json({ data: { message: 'Public key published' } });
     } catch (err) {
       next(err);
     }
   };
 
-  getKey = async (req, res, next) => {
+  getKeys = async (req, res, next) => {
     try {
-      const key = await this._keyService.getPublicKey(req.params.userId);
-      res.json({ data: key });
+      const keys = await this._keyService.getPublicKeys(req.params.userId);
+      res.json({ data: keys });
     } catch (err) {
       next(err);
     }

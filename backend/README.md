@@ -126,6 +126,65 @@ npm start
 | POST | `/api/blockchain/verify` | No | Verify message hash on-chain |
 | GET | `/api/health` | No | Health check |
 
+## Database Schema
+
+```mermaid
+erDiagram
+  users ||--o{ messages : sends
+  users ||--o{ messages : receives
+  users ||--o{ public_keys : has
+  users ||--o{ message_shares : shares
+  messages ||--o{ message_shares : forwarded
+  messages ||--|| blockchain_records : recorded
+
+  users {
+    UUID user_id PK
+    VARCHAR username UK
+    VARCHAR password_hash
+    DATETIME created_at
+  }
+
+  public_keys {
+    UUID id PK
+    UUID user_id FK
+    TEXT public_key
+    ENUM key_type
+    DATETIME created_at
+    DATETIME rotated_at
+  }
+
+  messages {
+    UUID message_id PK
+    UUID sender_id FK
+    UUID recipient_id FK
+    TEXT ciphertext
+    VARCHAR nonce
+    DATETIME created_at
+    DATETIME deleted_at
+  }
+
+  message_shares {
+    UUID id PK
+    UUID message_id FK
+    UUID shared_by_id FK
+    UUID shared_with_id FK
+    TEXT ciphertext
+    VARCHAR nonce
+    DATETIME created_at
+    DATETIME revoked_at
+  }
+
+  blockchain_records {
+    UUID id PK
+    UUID message_id FK
+    VARCHAR tx_hash UK
+    VARCHAR digest_hash
+    DATETIME created_at
+  }
+```
+
+DDL lives in [scripts/init-db.js](scripts/init-db.js).
+
 ## Security Notes
 
 - The server **never** sees plaintext messages — only ciphertext

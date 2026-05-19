@@ -1,5 +1,3 @@
-const { ConflictError, NotFoundError } = require('../utils/errors');
-const logger = require('../utils/logger').child({ component: 'key' });
 
 /**
  * KeyService — manages public key storage and retrieval.
@@ -9,34 +7,35 @@ const logger = require('../utils/logger').child({ component: 'key' });
  * the service flags a key change warning so clients can alert users
  * (similar to SSH known_hosts).
  */
+const { NotFoundError } = require('../utils/errors');
+const logger = require('../utils/logger');
+
 class KeyService {
   constructor(keyRepository) {
     this._keyRepo = keyRepository;
   }
 
-  async publishKey({ userId, publicKey, keyType = 'x25519' }) {
-    const existing = await this._keyRepo.getPublicKey(userId);
-    const rotated = !!(existing && existing.public_key !== publicKey);
-
-    if (rotated) {
-      logger.warn(`Key rotation detected for user ${userId}`);
+  async publishKey({ userId, publicKey, keyType }) {
+    if (!['x25519', 'ed25519'].includes(keyType)) {
+      throw new Error('keyType must be x25519 or ed25519');
     }
 
     await this._keyRepo.storePublicKey({ userId, publicKey, keyType });
-    logger.info(`Public key published for user ${userId}`);
-
-    // Surface rotation back to the caller so the client can re-pin or
-    // warn the user (TOFU model — analogous to SSH known_hosts).
-    return {
-      rotated,
-      previousKey: rotated ? existing.public_key : null,
-    };
+    logger.info(`Public key (${keyType}) published for user ${userId}`);
   }
 
-  async getPublicKey(userId) {
-    const key = await this._keyRepo.getPublicKey(userId);
+  async getPublicKeys(userId) {
+    const keys = await this._keyRepo.getPublicKeys(userId);
+    if (keys.length === 0) {
+      throw new NotFoundError('No public keys found for this user');
+    }
+    return keys;
+  }
+
+  async getPublicKeyByType(userId, keyType) {
+    const key = await this._keyRepo.getPublicKeyByType(userId, keyType);
     if (!key) {
-      throw new NotFoundError('No public key found for this user');
+      throw new NotFoundError(`No ${keyType} key found for this user`);
     }
     return key;
   }

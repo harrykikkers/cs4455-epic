@@ -1,6 +1,3 @@
-const { v4: uuidv4 } = require('uuid');
-const { NotFoundError, ForbiddenError } = require('../utils/errors');
-const logger = require('../utils/logger').child({ component: 'message' });
 
 /**
  * MessageService — orchestrates message operations.
@@ -11,30 +8,33 @@ const logger = require('../utils/logger').child({ component: 'message' });
  * Uses the Observer pattern (EventBus) to notify the blockchain module
  * when messages are sent, without depending on it directly.
  */
+const { v4: uuidv4 } = require('uuid');
+const { NotFoundError, ForbiddenError } = require('../utils/errors');
+const logger = require('../utils/logger');
+
 class MessageService {
   constructor(messageRepository, eventBus) {
     this._messageRepo = messageRepository;
     this._eventBus = eventBus;
   }
 
-  async sendMessage({ senderId, recipientId, ciphertext, nonce, senderPublicKey }) {
-    const id = uuidv4();
+  async sendMessage({ senderId, recipientId, ciphertext, nonce }) {
+    const messageId = uuidv4();
 
     await this._messageRepo.create({
-      id, senderId, recipientId, ciphertext, nonce, senderPublicKey, txHash: null,
+      messageId, senderId, recipientId, ciphertext, nonce,
     });
 
-    // Emit event — blockchain listener will pick this up and record the hash
     await this._eventBus.emit('message:sent', {
-      messageId: id,
+      messageId,
       senderId,
       recipientId,
       ciphertext,
       timestamp: new Date().toISOString(),
     });
 
-    logger.info(`Message sent: ${id} from ${senderId} to ${recipientId}`);
-    return { id };
+    logger.info(`Message sent: ${messageId} from ${senderId} to ${recipientId}`);
+    return { messageId };
   }
 
   async getInbox(userId, options) {
@@ -45,37 +45,24 @@ class MessageService {
     return this._messageRepo.findBySender(userId, options);
   }
 
-  /**
-   * Loads a message and verifies the caller may read it. Returns the row.
-   * Throws NotFoundError / ForbiddenError so callers don't have to repeat
-   * the access logic.
-   */
-  async _assertAccess(messageId, userId) {
+  async getMessage(messageId, userId) {
     const message = await this._messageRepo.findById(messageId);
     if (!message) {
       throw new NotFoundError('Message not found');
     }
 
-    if (message.sender_id === userId || message.recipient_id === userId) {
-      return message;
+    if (message.sender_id !== userId && message.recipient_id !== userId) {
+      const shares = await this._messageRepo.findSharedWith(messageId);
+      const isShared = shares.some((s) => s.shared_with_id === userId);
+      if (!isShared) {
+        throw new ForbiddenError('You do not have access to this message');
+      }
     }
 
-    const shares = await this._messageRepo.findSharedWith(messageId);
-    if (shares.some((s) => s.shared_with_id === userId)) {
-      return message;
-    }
-
-    throw new ForbiddenError('You do not have access to this message');
-  }
-
-  async getMessage(messageId, userId) {
-    return this._assertAccess(messageId, userId);
+    return message;
   }
 
   async forwardMessage({ messageId, forwarderId, recipientId, ciphertext, nonce }) {
-    // Authorise: only sender, recipient, or an existing sharee may forward.
-    await this._assertAccess(messageId, forwarderId);
-
     const id = uuidv4();
 
     await this._messageRepo.createShare({

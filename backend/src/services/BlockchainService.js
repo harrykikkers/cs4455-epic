@@ -1,13 +1,3 @@
-const { ethers } = require('ethers');
-const config = require('../config');
-const logger = require('../utils/logger').child({ component: 'blockchain' });
-
-// Minimal ABI — only the functions our server calls
-const CONTRACT_ABI = [
-  'function recordHash(bytes32 messageHash) external',
-  'function getRecord(bytes32 messageHash) external view returns (uint256 timestamp, address recorder)',
-  'event HashRecorded(bytes32 indexed messageHash, uint256 timestamp, address recorder)',
-];
 
 /**
  * BlockchainService — writes message digest hashes to Ethereum Sepolia.
@@ -20,25 +10,29 @@ const CONTRACT_ABI = [
  * MessageRepository dependency exists so we can write the transaction
  * hash back to the messages row after a successful chain write.
  */
+const { ethers } = require('ethers');
+const { v4: uuidv4 } = require('uuid');
+const config = require('../config');
+const logger = require('../utils/logger');
+
+const CONTRACT_ABI = [
+  'function recordHash(bytes32 messageHash) external',
+  'function getRecord(bytes32 messageHash) external view returns (uint256 timestamp, address recorder)',
+  'event HashRecorded(bytes32 indexed messageHash, uint256 timestamp, address recorder)',
+];
+
 class BlockchainService {
-  constructor(hashStrategy, eventBus, messageRepository) {
+  constructor(hashStrategy, eventBus, dbPool) {
     this._hashStrategy = hashStrategy;
-    this._messageRepo = messageRepository;
+    this._pool = dbPool;
     this._provider = null;
     this._wallet = null;
     this._contract = null;
 
-    // Subscribe to message events. Sent and forwarded are handled
-    // separately because only 'sent' has a row to update on the
-    // messages table — forwards are tracked in message_shares.
     eventBus.on('message:sent', (payload) => this._onMessageSent(payload));
-    eventBus.on('message:forwarded', (payload) => this._onMessageForwarded(payload));
+    eventBus.on('message:forwarded', (payload) => this._onMessageSent(payload));
   }
 
-  /**
-   * Lazy initialisation — don't connect to Sepolia until first use.
-   * Avoids startup failures when blockchain config is missing (dev mode).
-   */
   _getContract() {
     if (!this._contract) {
       if (!config.blockchain.rpcUrl || !config.blockchain.privateKey) {
@@ -56,57 +50,36 @@ class BlockchainService {
     return this._contract;
   }
 
-  /**
-   * Observer handler — called when a new message is sent.
-   * Writes the digest on-chain and persists the tx hash on the row.
-   */
   async _onMessageSent({ messageId, ciphertext }) {
     try {
-      const txHash = await this.recordDigest(ciphertext);
-      if (!txHash) return; // chain not configured — already logged
-      await this._messageRepo.updateTxHash(messageId, txHash);
-      logger.info(`Blockchain digest recorded for message ${messageId}: ${txHash}`);
+      const result = await this.recordDigest(messageId, ciphertext);
+      if (result) {
+        logger.info(`Blockchain digest recorded for message ${messageId}: ${result.txHash}`);
+      }
     } catch (err) {
-      // Log but don't fail — blockchain is best-effort
       logger.error(`Blockchain write failed for message ${messageId}:`, err);
     }
   }
 
-  /**
-   * Observer handler — called when a message is forwarded (re-encrypted
-   * for a new recipient). The original messages.tx_hash should NOT be
-   * overwritten with the forward's digest; the forward gets its own
-   * on-chain record but no DB write-back today.
-   */
-  async _onMessageForwarded({ shareId, ciphertext }) {
-    try {
-      const txHash = await this.recordDigest(ciphertext);
-      if (!txHash) return;
-      logger.info(`Blockchain digest recorded for share ${shareId}: ${txHash}`);
-    } catch (err) {
-      logger.error(`Blockchain write failed for share ${shareId}:`, err);
-    }
-  }
-
-  /**
-   * Hash the ciphertext and write the digest to the smart contract.
-   * Returns the transaction hash for storage in MySQL.
-   */
-  async recordDigest(data) {
+  async recordDigest(messageId, data) {
     const contract = this._getContract();
     if (!contract) return null;
 
-    const hash = await this._hashStrategy.hash(data);
-    const tx = await contract.recordHash(hash);
+    const digestHash = await this._hashStrategy.hash(data);
+    const tx = await contract.recordHash(digestHash);
     const receipt = await tx.wait();
+    const txHash = receipt.hash;
 
-    return receipt.hash;
+    // Write to blockchain_records table
+    const id = uuidv4();
+    await this._pool.execute(
+      'INSERT INTO blockchain_records (id, message_id, tx_hash, digest_hash) VALUES (?, ?, ?, ?)',
+      [id, messageId, txHash, digestHash]
+    );
+
+    return { txHash, digestHash };
   }
 
-  /**
-   * Verify a piece of data against its on-chain record.
-   * Used by the verification page endpoint.
-   */
   async verifyDigest(data) {
     const contract = this._getContract();
     if (!contract) return { verified: false, reason: 'Blockchain not configured' };

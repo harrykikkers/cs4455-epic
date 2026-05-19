@@ -26,15 +26,21 @@ class AuthController {
     }
   };
 
-  me = async (req, res, next) => {
+  changePassword = async (req, res, next) => {
     try {
-      // Round-trip to the DB so the response reflects the current row,
-      // not the JWT claims at issue time (handles rename/delete).
-      const user = await this._authService.getUser(req.user.id);
-      res.json({ data: user });
+      await this._authService.changePassword({
+        userId: req.user.id,
+        currentPassword: req.body.currentPassword,
+        newPassword: req.body.newPassword,
+      });
+      res.json({ data: { message: 'Password changed' } });
     } catch (err) {
       next(err);
     }
+  };
+
+  me = async (req, res) => {
+    res.json({ data: req.user });
   };
 }
 
