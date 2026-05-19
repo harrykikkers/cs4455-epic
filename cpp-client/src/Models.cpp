@@ -30,21 +30,10 @@ void MessageStore::add(const Message& m) {
     _messages.push_back(m);
 }
 
-void MessageStore::addAll(const vector<Message>& msgs) {
-    _messages.insert(_messages.end(), msgs.begin(), msgs.end());
-}
-
 vector<Message> MessageStore::inbox(const string& myUserId) const {
     vector<Message> result;
     copy_if(_messages.begin(), _messages.end(), back_inserter(result),
             [&](const Message& m) { return m.recipientId == myUserId; });
-    return result;
-}
-
-vector<Message> MessageStore::sent(const string& myUserId) const {
-    vector<Message> result;
-    copy_if(_messages.begin(), _messages.end(), back_inserter(result),
-            [&](const Message& m) { return m.senderId == myUserId; });
     return result;
 }
 
@@ -71,10 +60,6 @@ const Message* MessageStore::findById(const string& id) const {
     auto it = find_if(_messages.begin(), _messages.end(),
                       [&](const Message& m) { return m.id == id; });
     return it != _messages.end() ? &*it : nullptr;
-}
-
-const vector<Message>& MessageStore::all() const {
-    return _messages;
 }
 
 } // namespace Client

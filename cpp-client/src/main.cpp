@@ -25,37 +25,48 @@ struct ZeroOnExit {
     ~ZeroOnExit() { if (!s.empty()) sodium_memzero(s.data(), s.size()); }
 };
 
-static vector<Message> showInbox(ApiClient& api, MessageStore& store,
-                                  const string& myUserId, const string& secretKey) {
+static bool parseIndex(const string& s, size_t& out, size_t maxExclusive) {
+    try { out = stoul(s); } catch (...) { cerr << "Invalid number.\n"; return false; }
+    if (out >= maxExclusive) { cerr << "Out of range.\n"; return false; }
+    return true;
+}
+
+// Fetches received messages, groups them into conversations, and lists the peers.
+// Returns the conversations so the caller can let the user pick one.
+static vector<Conversation> listConversations(ApiClient& api, MessageStore& store,
+                                              const string& myUserId) {
     auto resp = api.getInbox();
     store = MessageStore{};
     if (resp.contains("data") && resp["data"].is_array()) {
         for (const auto& item : resp["data"])
             store.add(Message::fromJson(item));
     }
-
     auto convs = store.conversations(myUserId);
-    if (convs.empty()) { cout << "Inbox is empty.\n"; return {}; }
+    if (convs.empty()) { cout << "No conversations yet.\n"; return {}; }
+    cout << "\n--- Conversations ---\n";
+    for (size_t i = 0; i < convs.size(); ++i) {
+        cout << "[" << i << "] " << convs[i].peerId
+             << "  (" << convs[i].messages.size() << " message"
+             << (convs[i].messages.size() == 1 ? "" : "s") << ")\n";
+    }
+    return convs;
+}
 
-    // Build a flat list in the same order as displayed so that the index
-    // shown to the user always matches what we look up later.
-    vector<Message> displayed;
-    for (const auto& conv : convs) {
-        cout << "\n--- From " << conv.peerId << " ---\n";
-        for (const auto& m : conv.messages) {
-            cout << "[" << displayed.size() << "] id=" << m.id
-                 << "  at=" << m.createdAt << "\n";
-            try {
-                string plain = CryptoHelpers::decryptMessage(
-                    m.ciphertext, m.nonce, m.senderPublicKey, secretKey);
-                cout << "    " << plain << "\n";
-            } catch (...) {
-                cout << "    (encrypted for a different keypair — cannot decrypt)\n";
-            }
-            displayed.push_back(m);
+// Displays all messages in one conversation thread and returns them for indexing.
+static vector<Message> showThread(const Conversation& conv, const string& secretKey) {
+    cout << "\n--- Thread with " << conv.peerId << " ---\n";
+    for (size_t i = 0; i < conv.messages.size(); ++i) {
+        const auto& m = conv.messages[i];
+        cout << "[" << i << "] " << m.createdAt << "  id=" << m.id << "\n";
+        try {
+            string plain = CryptoHelpers::decryptMessage(
+                m.ciphertext, m.nonce, m.senderPublicKey, secretKey);
+            cout << "    " << plain << "\n";
+        } catch (...) {
+            cout << "    (encrypted for a different keypair — cannot decrypt)\n";
         }
     }
-    return displayed;
+    return conv.messages;
 }
 
 static void showSent(ApiClient& api) {
@@ -66,21 +77,16 @@ static void showSent(ApiClient& api) {
     }
     const auto& data = resp["data"];
     if (data.empty()) { cout << "No sent messages.\n"; return; }
+    cout << "\n--- Sent messages ---\n";
     for (size_t i = 0; i < data.size(); ++i) {
         auto m = Message::fromJson(data[i]);
-        cout << "[" << i << "] id=" << m.id
+        cout << "[" << i << "] " << m.createdAt
              << "  to=" << m.recipientId
-             << "  at=" << m.createdAt << "\n"
+             << "  id=" << m.id << "\n"
              // Sent messages are encrypted with the recipient's public key —
              // only the recipient can decrypt them.
              << "    (encrypted — only the recipient can read this)\n";
     }
-}
-
-static bool parseIndex(const string& s, size_t& out, size_t maxExclusive) {
-    try { out = stoul(s); } catch (...) { cerr << "Invalid number.\n"; return false; }
-    if (out >= maxExclusive) { cerr << "Out of range.\n"; return false; }
-    return true;
 }
 
 int main(int argc, char* argv[]) {
@@ -152,7 +158,7 @@ int main(int argc, char* argv[]) {
 
         while (true) {
             cout << "\n1) Send message\n"
-                 << "2) View inbox\n"
+                 << "2) View conversations\n"
                  << "3) View sent messages\n"
                  << "4) Forward a message\n"
                  << "5) Revoke access to a message\n"
@@ -185,26 +191,33 @@ int main(int argc, char* argv[]) {
                 cout << "Message sent.\n";
 
             } else if (choice == "2") {
-                showInbox(api, store, myUserId, secretKey);
+                // List conversations, let the user pick one to open as a thread.
+                auto convs = listConversations(api, store, myUserId);
+                if (convs.empty()) continue;
+
+                cout << "Conversation number (or Enter to go back): ";
+                string s; getline(cin, s);
+                if (s.empty()) continue;
+                size_t idx;
+                if (!parseIndex(s, idx, convs.size())) continue;
+
+                showThread(convs[idx], secretKey);
 
             } else if (choice == "3") {
                 showSent(api);
 
             } else if (choice == "4") {
-                // Decrypt a received message and re-encrypt it for a new recipient.
-                auto msgs = showInbox(api, store, myUserId, secretKey);
-                if (msgs.empty()) continue;
+                cout << "Message ID to forward: ";
+                string msgId; getline(cin, msgId);
 
-                cout << "Message number to forward: ";
-                string s; getline(cin, s);
-                size_t idx;
-                if (!parseIndex(s, idx, msgs.size())) continue;
+                auto resp = api.getMessage(msgId);
+                if (!resp.contains("data")) { cerr << "Message not found.\n"; continue; }
+                auto m = Message::fromJson(resp["data"]);
 
                 string plaintext;
                 try {
                     plaintext = CryptoHelpers::decryptMessage(
-                        msgs[idx].ciphertext, msgs[idx].nonce,
-                        msgs[idx].senderPublicKey, secretKey);
+                        m.ciphertext, m.nonce, m.senderPublicKey, secretKey);
                 } catch (...) {
                     cerr << "Cannot forward — could not decrypt this message.\n";
                     continue;
@@ -223,35 +236,29 @@ int main(int argc, char* argv[]) {
                 string nonce;
                 string ciphertext = CryptoHelpers::encryptMessage(
                     plaintext, keyResp["data"]["public_key"].get<string>(), secretKey, nonce);
-                api.forwardMessage(msgs[idx].id, recipientId, ciphertext, nonce);
+                api.forwardMessage(m.id, recipientId, ciphertext, nonce);
                 cout << "Message forwarded.\n";
 
             } else if (choice == "5") {
-                auto msgs = showInbox(api, store, myUserId, secretKey);
-                if (msgs.empty()) continue;
-
-                cout << "Message number: ";
-                string s; getline(cin, s);
-                size_t idx;
-                if (!parseIndex(s, idx, msgs.size())) continue;
+                cout << "Message ID to revoke: ";
+                string msgId; getline(cin, msgId);
 
                 string targetUserId;
                 cout << "Revoke access for user ID: ";
                 getline(cin, targetUserId);
 
-                api.revokeAccess(msgs[idx].id, targetUserId);
+                api.revokeAccess(msgId, targetUserId);
                 cout << "Access revoked.\n";
 
             } else if (choice == "6") {
                 cout << "Message ID to download: ";
                 string msgId; getline(cin, msgId);
 
-                // Use findById to check if it's already in the local store first.
+                // Check local store first before hitting the network.
                 const Message* cached = store.findById(msgId);
                 if (cached) {
-                    cout << "id=" << cached->id
-                         << "  from=" << cached->senderId
-                         << "  at="   << cached->createdAt << "\n";
+                    cout << "from=" << cached->senderId
+                         << "  at=" << cached->createdAt << "\n";
                     try {
                         string plain = CryptoHelpers::decryptMessage(
                             cached->ciphertext, cached->nonce,
@@ -268,9 +275,8 @@ int main(int argc, char* argv[]) {
                         continue;
                     }
                     auto m = Message::fromJson(resp["data"]);
-                    cout << "id=" << m.id
-                         << "  from=" << m.senderId
-                         << "  at="   << m.createdAt << "\n";
+                    cout << "from=" << m.senderId
+                         << "  at=" << m.createdAt << "\n";
                     try {
                         string plain = CryptoHelpers::decryptMessage(
                             m.ciphertext, m.nonce, m.senderPublicKey, secretKey);

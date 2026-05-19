@@ -39,13 +39,9 @@ struct Conversation {
 class MessageStore {
 public:
     void add(const Message& m);
-    void addAll(const vector<Message>& msgs);
 
     // Messages where you are the recipient.
     vector<Message> inbox(const string& myUserId) const;
-
-    // Messages where you are the sender.
-    vector<Message> sent(const string& myUserId) const;
 
     // Inbox messages grouped by sender into Conversation objects,
     // sorted chronologically within each conversation.
@@ -53,8 +49,6 @@ public:
 
     // Returns a pointer to the message with the given id, or nullptr if not found.
     const Message* findById(const string& id) const;
-
-    const vector<Message>& all() const;
 
 private:
     vector<Message> _messages;
