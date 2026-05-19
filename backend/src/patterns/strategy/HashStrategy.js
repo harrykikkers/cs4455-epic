@@ -27,10 +27,6 @@ const config = require('../../config');
 
 class Argon2Strategy {
   constructor() {
-    // OWASP-recommended Argon2id parameters:
-    // memoryCost: 64 MiB — resistant to GPU/ASIC attacks
-    // timeCost: 3 iterations — balances security vs login latency
-    // parallelism: 4 threads — matches typical server core count
     // type: argon2id — hybrid of argon2i (side-channel resistant)
     //                   and argon2d (GPU resistant)
     this.options = {
