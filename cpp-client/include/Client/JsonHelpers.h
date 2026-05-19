@@ -3,6 +3,8 @@
 #include <nlohmann/json.hpp>
 #include <string>
 
+using std::string;
+
 namespace Client {
 
 using Json = nlohmann::json;
@@ -11,8 +13,8 @@ using Json = nlohmann::json;
 // Centralizes future changes to serialization (pretty-printing, error handling).
 class JsonHelpers {
 public:
-    static std::string toString(const Json& json);
-    static Json fromString(const std::string& text);
+    static string toString(const Json& json);
+    static Json fromString(const string& text);
 };
 
 } // namespace Client

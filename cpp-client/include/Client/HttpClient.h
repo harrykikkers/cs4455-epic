@@ -3,6 +3,9 @@
 #include <string>
 #include <vector>
 
+using std::string;
+using std::vector;
+
 namespace Client {
 
 // Small HTTPS helper wrapping libcurl.
@@ -11,20 +14,20 @@ namespace Client {
 class HttpClient {
 public:
     // Construct with API base URL, e.g. "https://api.example.com"
-    HttpClient(const std::string& baseUrl);
+    HttpClient(const string& baseUrl);
     ~HttpClient();
 
     // Send JSON via POST. `headers` may include authorization or other custom headers.
-    std::string postJson(const std::string& path, const std::string& jsonBody, const std::vector<std::string>& headers = {});
+    string postJson(const string& path, const string& jsonBody, const vector<string>& headers = {});
 
     // Simple GET helper. Returns raw response body.
-    std::string get(const std::string& path, const std::vector<std::string>& headers = {});
+    string get(const string& path, const vector<string>& headers = {});
 
     // Adjust request timeout (seconds)
     void setTimeout(long seconds);
 
 private:
-    std::string _baseUrl;
+    string _baseUrl;
     long _timeoutSeconds;
 };
 

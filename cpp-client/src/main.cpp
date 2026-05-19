@@ -7,6 +7,7 @@
 #include <sodium.h>
 #include <curl/curl.h>
 
+using namespace std;
 using namespace Client;
 
 // Improved CLI flow:
@@ -16,82 +17,82 @@ using namespace Client;
 // - encrypt, send, then fetch inbox and attempt to decrypt messages addressed to this user
 int main(int argc, char* argv[]) {
     try {
-        std::cout << "Epic Secure Messenger C++ Client" << std::endl;
+        cout << "Epic Secure Messenger C++ Client" << endl;
 
         // Initialize libsodium once per process
         if (sodium_init() < 0) {
-            std::cerr << "libsodium initialization failed" << std::endl;
+            cerr << "libsodium initialization failed" << endl;
             return EXIT_FAILURE;
         }
 
         // Initialize libcurl once per process
         curl_global_init(CURL_GLOBAL_DEFAULT);
 
-        const std::string baseUrl = argc > 1 ? argv[1] : "https://localhost:3000";
+        const string baseUrl = argc > 1 ? argv[1] : "https://localhost:3000";
         ApiClient api(baseUrl);
 
-        std::string username;
-        std::string email;
-        std::string password;
+        string username;
+        string email;
+        string password;
 
-        std::cout << "Username: ";
-        std::getline(std::cin, username);
-        std::cout << "Email: ";
-        std::getline(std::cin, email);
-        std::cout << "Password: ";
-        std::getline(std::cin, password);
+        cout << "Username: ";
+        getline(cin, username);
+        cout << "Email: ";
+        getline(cin, email);
+        cout << "Password: ";
+        getline(cin, password);
 
         auto registerResponse = api.registerUser(username, email, password);
-        std::cout << "Register response: " << JsonHelpers::toString(registerResponse) << std::endl;
+        cout << "Register response: " << JsonHelpers::toString(registerResponse) << endl;
 
         auto loginResponse = api.login(username, password);
-        std::cout << "Login response: " << JsonHelpers::toString(loginResponse) << std::endl;
+        cout << "Login response: " << JsonHelpers::toString(loginResponse) << endl;
 
         if (!loginResponse.contains("data") || !loginResponse["data"].contains("token") || !loginResponse["data"].contains("user")) {
-            throw std::runtime_error("Login did not return expected data");
+            throw runtime_error("Login did not return expected data");
         }
 
-        std::string currentUserId = loginResponse["data"]["user"].value("id", std::string{});
+        string currentUserId = loginResponse["data"]["user"].value("id", string{});
 
         // Generate an ephemeral keypair for this client run. In production, consider
         // a persistent keypair or OS keyring with explicit user consent.
-        std::string senderSecretKeyBase64;
-        std::string senderPublicKeyBase64 = CryptoHelpers::generateKeypairPublicBase64(senderSecretKeyBase64);
-        std::cout << "Generated ephemeral keypair" << std::endl;
+        string senderSecretKeyBase64;
+        string senderPublicKeyBase64 = CryptoHelpers::generateKeypairPublicBase64(senderSecretKeyBase64);
+        cout << "Generated ephemeral keypair" << endl;
 
         auto publishResponse = api.publishPublicKey(senderPublicKeyBase64, "x25519");
-        std::cout << "Publish key response: " << JsonHelpers::toString(publishResponse) << std::endl;
+        cout << "Publish key response: " << JsonHelpers::toString(publishResponse) << endl;
 
-        std::string recipientId;
-        std::cout << "Recipient user ID: ";
-        std::getline(std::cin, recipientId);
+        string recipientId;
+        cout << "Recipient user ID: ";
+        getline(cin, recipientId);
 
         // Fetch recipient's public key from server instead of manual paste.
         auto keyResp = api.getPublicKey(recipientId);
-        std::string recipientPublicKeyBase64;
+        string recipientPublicKeyBase64;
         if (keyResp.contains("data") && keyResp["data"].contains("public_key")) {
-            recipientPublicKeyBase64 = keyResp["data"]["public_key"].get<std::string>();
+            recipientPublicKeyBase64 = keyResp["data"]["public_key"].get<string>();
         } else {
-            throw std::runtime_error("Failed to retrieve recipient public key");
+            throw runtime_error("Failed to retrieve recipient public key");
         }
 
-        std::string plaintext;
-        std::cout << "Message: ";
-        std::getline(std::cin, plaintext);
+        string plaintext;
+        cout << "Message: ";
+        getline(cin, plaintext);
 
         // Encrypt the message locally. Server never sees plaintext.
-        std::string nonce;
-        std::string ciphertext = CryptoHelpers::encryptMessage(plaintext, recipientPublicKeyBase64, senderSecretKeyBase64, nonce);
-        std::cout << "Encrypted message ciphertext: " << ciphertext << std::endl;
+        string nonce;
+        string ciphertext = CryptoHelpers::encryptMessage(plaintext, recipientPublicKeyBase64, senderSecretKeyBase64, nonce);
+        cout << "Encrypted message ciphertext: " << ciphertext << endl;
 
         auto sendResponse = api.sendEncryptedMessage(recipientId, ciphertext, nonce, senderPublicKeyBase64);
-        std::cout << "Send response: " << JsonHelpers::toString(sendResponse) << std::endl;
+        cout << "Send response: " << JsonHelpers::toString(sendResponse) << endl;
 
         // Fetch inbox and attempt to decrypt messages addressed to current user.
         auto inboxResponse = api.getInbox();
-        std::cout << "Inbox (raw): " << JsonHelpers::toString(inboxResponse) << std::endl;
+        cout << "Inbox (raw): " << JsonHelpers::toString(inboxResponse) << endl;
 
-        std::vector<Message> messages;
+        vector<Message> messages;
         if (inboxResponse.contains("data") && inboxResponse["data"].is_array()) {
             for (const auto& item : inboxResponse["data"]) {
                 messages.push_back(Message::fromJson(item));
@@ -99,23 +100,23 @@ int main(int argc, char* argv[]) {
         }
 
         // Use STL algorithms + lambda as required by rubric
-        auto it = std::find_if(messages.begin(), messages.end(), [&](const Message& m) {
+        auto it = find_if(messages.begin(), messages.end(), [&](const Message& m) {
             return m.recipientId == currentUserId;
         });
 
         if (it != messages.end()) {
             try {
-                std::string plain = CryptoHelpers::decryptMessage(it->ciphertext, it->nonce, it->senderPublicKey, senderSecretKeyBase64);
-                std::cout << "Decrypted first message addressed to me: " << plain << std::endl;
-            } catch (const std::exception& ex) {
-                std::cerr << "Failed to decrypt message: " << ex.what() << std::endl;
+                string plain = CryptoHelpers::decryptMessage(it->ciphertext, it->nonce, it->senderPublicKey, senderSecretKeyBase64);
+                cout << "Decrypted first message addressed to me: " << plain << endl;
+            } catch (const exception& ex) {
+                cerr << "Failed to decrypt message: " << ex.what() << endl;
             }
         }
 
         // Clean up libcurl
         curl_global_cleanup();
-    } catch (const std::exception& ex) {
-        std::cerr << "Error: " << ex.what() << std::endl;
+    } catch (const exception& ex) {
+        cerr << "Error: " << ex.what() << endl;
         return EXIT_FAILURE;
     }
 

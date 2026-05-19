@@ -3,36 +3,38 @@
 #include <string>
 #include "JsonHelpers.h"
 
+using std::string;
+
 namespace Client {
 
 struct User {
-    std::string id;
-    std::string username;
-    std::string email;
+    string id;
+    string username;
+    string email;
 
     static User fromJson(const Json& j) {
-        return User{ j.value("id", std::string{}), j.value("username", std::string{}), j.value("email", std::string{}) };
+        return User{ j.value("id", string{}), j.value("username", string{}), j.value("email", string{}) };
     }
 };
 
 struct Message {
-    std::string id;
-    std::string senderId;
-    std::string recipientId;
-    std::string ciphertext;
-    std::string nonce;
-    std::string senderPublicKey;
-    std::string createdAt;
+    string id;
+    string senderId;
+    string recipientId;
+    string ciphertext;
+    string nonce;
+    string senderPublicKey;
+    string createdAt;
 
     static Message fromJson(const Json& j) {
         return Message{
-            j.value("id", std::string{}),
-            j.value("sender_id", std::string{}),
-            j.value("recipient_id", std::string{}),
-            j.value("ciphertext", std::string{}),
-            j.value("nonce", std::string{}),
-            j.value("sender_public_key", std::string{}),
-            j.value("created_at", std::string{})
+            j.value("id", string{}),
+            j.value("sender_id", string{}),
+            j.value("recipient_id", string{}),
+            j.value("ciphertext", string{}),
+            j.value("nonce", string{}),
+            j.value("sender_public_key", string{}),
+            j.value("created_at", string{})
         };
     }
 };

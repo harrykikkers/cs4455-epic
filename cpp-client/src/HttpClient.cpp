@@ -10,6 +10,8 @@
 #include <curl/curl.h>
 #include <stdexcept>
 
+using namespace std;
+
 namespace Client {
 
 namespace {
@@ -25,7 +27,7 @@ size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp) {
 // NOTE: global libcurl initialization/cleanup must be done once per process.
 // This wrapper does NOT call `curl_global_init` or `curl_global_cleanup`.
 // Callers (main) should initialise the library during program startup.
-HttpClient::HttpClient(const std::string& baseUrl)
+HttpClient::HttpClient(const string& baseUrl)
     : _baseUrl(baseUrl), _timeoutSeconds(30) {
 }
 
@@ -37,17 +39,17 @@ void HttpClient::setTimeout(long seconds) {
 }
 
 // POST JSON to `baseUrl + path`. `headers` may include Authorization, etc.
-// Throws std::runtime_error on libcurl errors. Returns raw response body.
-std::string HttpClient::postJson(const std::string& path,
-                                 const std::string& jsonBody,
-                                 const std::vector<std::string>& headers) {
+// Throws runtime_error on libcurl errors. Returns raw response body.
+string HttpClient::postJson(const string& path,
+                            const string& jsonBody,
+                            const vector<string>& headers) {
     CURL* curl = curl_easy_init();
     if (!curl) {
-        throw std::runtime_error("Failed to initialize libcurl");
+        throw runtime_error("Failed to initialize libcurl");
     }
 
-    std::string response;
-    std::string url = _baseUrl + path;
+    string response;
+    string url = _baseUrl + path;
     struct curl_slist* headerList = nullptr;
     // Required header for JSON payloads
     headerList = curl_slist_append(headerList, "Content-Type: application/json");
@@ -72,21 +74,21 @@ std::string HttpClient::postJson(const std::string& path,
     curl_easy_cleanup(curl);
 
     if (code != CURLE_OK) {
-        throw std::runtime_error(std::string("HTTP POST failed: ") + curl_easy_strerror(code));
+        throw runtime_error(string("HTTP POST failed: ") + curl_easy_strerror(code));
     }
 
     return response;
 }
 
 // Simple GET helper. Caller must include authorization headers when necessary.
-std::string HttpClient::get(const std::string& path, const std::vector<std::string>& headers) {
+string HttpClient::get(const string& path, const vector<string>& headers) {
     CURL* curl = curl_easy_init();
     if (!curl) {
-        throw std::runtime_error("Failed to initialize libcurl");
+        throw runtime_error("Failed to initialize libcurl");
     }
 
-    std::string response;
-    std::string url = _baseUrl + path;
+    string response;
+    string url = _baseUrl + path;
     struct curl_slist* headerList = nullptr;
     for (const auto& header : headers) {
         headerList = curl_slist_append(headerList, header.c_str());
@@ -106,7 +108,7 @@ std::string HttpClient::get(const std::string& path, const std::vector<std::stri
     curl_easy_cleanup(curl);
 
     if (code != CURLE_OK) {
-        throw std::runtime_error(std::string("HTTP GET failed: ") + curl_easy_strerror(code));
+        throw runtime_error(string("HTTP GET failed: ") + curl_easy_strerror(code));
     }
 
     return response;
