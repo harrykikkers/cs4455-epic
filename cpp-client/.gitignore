@@ -1,0 +1,20 @@
+# Ignore CMake build files and artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+build/
+*.o
+*.obj
+*.a
+*.so
+epic_client
+client_lib
+libclient_lib.a
+*.exe
+.vscode/
+
+# Editor temp files
+*~
+*.swp
+.DS_Store

@@ -1,2 +1,0 @@
-/usr/bin/ar qc libclient_lib.a CMakeFiles/client_lib.dir/src/HttpClient.cpp.o CMakeFiles/client_lib.dir/src/JsonHelpers.cpp.o CMakeFiles/client_lib.dir/src/CryptoHelpers.cpp.o CMakeFiles/client_lib.dir/src/ApiClient.cpp.o
-/usr/bin/ranlib libclient_lib.a

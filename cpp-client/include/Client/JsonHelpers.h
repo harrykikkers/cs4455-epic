@@ -7,6 +7,8 @@ namespace Client {
 
 using Json = nlohmann::json;
 
+// Small wrapper so callers don't need to include nlohmann/json everywhere.
+// Centralizes future changes to serialization (pretty-printing, error handling).
 class JsonHelpers {
 public:
     static std::string toString(const Json& json);

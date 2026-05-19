@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/epic_client.dir/src/main.cpp.o -o epic_client  libclient_lib.a /usr/lib/x86_64-linux-gnu/libsodium.so /usr/lib/x86_64-linux-gnu/libcurl.so 

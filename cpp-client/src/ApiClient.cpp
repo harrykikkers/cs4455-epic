@@ -1,3 +1,8 @@
+// API client: small convenience layer mapping high-level operations to HTTP calls.
+// - Handles JSON serialization and automatic inclusion of the JWT Authorization header
+//   for authenticated endpoints.
+// - Returns raw JSON objects (nlohmann::json) for the caller to interpret.
+
 #include "Client/ApiClient.h"
 #include "Client/HttpClient.h"
 #include "Client/JsonHelpers.h"
@@ -13,6 +18,7 @@ void ApiClient::setJwtToken(const std::string& token) {
     _jwtToken = token;
 }
 
+// Register a new user. Returns server JSON response.
 Json ApiClient::registerUser(const std::string& username,
                              const std::string& email,
                              const std::string& password) {
@@ -26,6 +32,7 @@ Json ApiClient::registerUser(const std::string& username,
     return JsonHelpers::fromString(response);
 }
 
+// Login and capture JWT token if returned under `data.token`.
 Json ApiClient::login(const std::string& username, const std::string& password) {
     HttpClient client(_baseUrl);
     Json payload = {
@@ -64,6 +71,7 @@ Json ApiClient::publishPublicKey(const std::string& publicKeyBase64, const std::
     return JsonHelpers::fromString(response);
 }
 
+// Send an already-encrypted message (ciphertext + nonce + sender public key).
 Json ApiClient::sendEncryptedMessage(const std::string& recipientId,
                                      const std::string& ciphertext,
                                      const std::string& nonce,
@@ -110,6 +118,16 @@ Json ApiClient::getMessage(const std::string& messageId) {
     HttpClient client(_baseUrl);
     std::vector<std::string> headers = {"Authorization: Bearer " + _jwtToken};
     std::string response = client.get("/api/messages/" + messageId, headers);
+    return JsonHelpers::fromString(response);
+}
+
+Json ApiClient::getPublicKey(const std::string& userId) {
+    HttpClient client(_baseUrl);
+    std::vector<std::string> headers;
+    if (!_jwtToken.empty()) {
+        headers.push_back("Authorization: Bearer " + _jwtToken);
+    }
+    std::string response = client.get("/api/keys/" + userId, headers);
     return JsonHelpers::fromString(response);
 }
 
