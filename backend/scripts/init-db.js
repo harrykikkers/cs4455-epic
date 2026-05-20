@@ -58,12 +58,15 @@ async function init() {
       recipient_id CHAR(36) NOT NULL,
       ciphertext TEXT NOT NULL,
       nonce VARCHAR(255) NOT NULL,
+      digest_hash CHAR(66) NULL,
+      chain_status ENUM('pending','recorded','failed') NOT NULL DEFAULT 'pending',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       deleted_at DATETIME NULL,
       FOREIGN KEY (sender_id) REFERENCES users(user_id),
       FOREIGN KEY (recipient_id) REFERENCES users(user_id),
       INDEX idx_recipient (recipient_id, deleted_at, created_at),
-      INDEX idx_sender (sender_id, deleted_at, created_at)
+      INDEX idx_sender (sender_id, deleted_at, created_at),
+      INDEX idx_chain_status (chain_status, created_at)
     )`,
 
     `CREATE TABLE IF NOT EXISTS message_shares (
@@ -133,6 +136,39 @@ async function init() {
       'ALTER TABLE public_keys ADD UNIQUE KEY uniq_user_keytype (user_id, key_type)'
     );
     console.log('Added unique constraint on public_keys (user_id, key_type)');
+  } catch (err) {
+    if (err.code !== 'ER_DUP_KEYNAME') throw err;
+  }
+
+  // Blockchain integration — client-supplied keccak256(plaintext) digest +
+  // a chain_status enum tracking whether the digest has been written to Sepolia.
+  // Added as backward-compatible migrations so existing dev databases keep working.
+  try {
+    await pool.execute(
+      `ALTER TABLE messages
+         ADD COLUMN digest_hash CHAR(66) NULL
+         AFTER nonce`
+    );
+    console.log('Added messages.digest_hash');
+  } catch (err) {
+    if (err.code !== 'ER_DUP_FIELDNAME') throw err;
+  }
+  try {
+    await pool.execute(
+      `ALTER TABLE messages
+         ADD COLUMN chain_status ENUM('pending','recorded','failed')
+         NOT NULL DEFAULT 'pending'
+         AFTER digest_hash`
+    );
+    console.log('Added messages.chain_status');
+  } catch (err) {
+    if (err.code !== 'ER_DUP_FIELDNAME') throw err;
+  }
+  try {
+    await pool.execute(
+      'ALTER TABLE messages ADD INDEX idx_chain_status (chain_status, created_at)'
+    );
+    console.log('Added index on messages (chain_status, created_at)');
   } catch (err) {
     if (err.code !== 'ER_DUP_KEYNAME') throw err;
   }

@@ -6,15 +6,26 @@ class MessageController {
   send = async (req, res, next) => {
     try {
       // Destructure explicitly so a client can't override senderId via the body.
-      const { recipientId, ciphertext, nonce, senderPublicKey } = req.body;
+      // `digest` is the client-computed keccak256 of plaintext — the server
+      // relays it to the blockchain listener without inspection.
+      const { recipientId, ciphertext, nonce, digest } = req.body;
       const result = await this._messageService.sendMessage({
         senderId: req.user.id,
         recipientId,
         ciphertext,
         nonce,
-        senderPublicKey,
+        digest,
       });
       res.status(201).json({ data: result });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  chainProof = async (req, res, next) => {
+    try {
+      const proof = await this._messageService.getChainProof(req.params.id, req.user.id);
+      res.json({ data: proof });
     } catch (err) {
       next(err);
     }

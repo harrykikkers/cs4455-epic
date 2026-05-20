@@ -1,0 +1,92 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "address": null,
+  "deployTxHash": null,
+  "deployBlock": null,
+  "notes": "Replace address, deployTxHash, deployBlock after running contracts/DEPLOY.md. The ABI below is hand-rolled from MessageDigest.sol; replace it with Remix's Compilation Details output if you want an exact byte-for-byte match (functionally identical either way).",
+  "abi": [
+    {
+      "type": "constructor",
+      "inputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "error",
+      "name": "NotOwner",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotRecorder",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "AlreadyRecorded",
+      "inputs": [
+        { "name": "digest", "type": "bytes32" }
+      ]
+    },
+    {
+      "type": "event",
+      "name": "HashRecorded",
+      "anonymous": false,
+      "inputs": [
+        { "name": "digest", "type": "bytes32", "indexed": true },
+        { "name": "timestamp", "type": "uint256", "indexed": false },
+        { "name": "recorder", "type": "address", "indexed": true }
+      ]
+    },
+    {
+      "type": "event",
+      "name": "RecorderUpdated",
+      "anonymous": false,
+      "inputs": [
+        { "name": "recorder", "type": "address", "indexed": true },
+        { "name": "allowed", "type": "bool", "indexed": false }
+      ]
+    },
+    {
+      "type": "function",
+      "name": "owner",
+      "inputs": [],
+      "outputs": [{ "name": "", "type": "address" }],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "recorders",
+      "inputs": [{ "name": "", "type": "address" }],
+      "outputs": [{ "name": "", "type": "bool" }],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "setRecorder",
+      "inputs": [
+        { "name": "r", "type": "address" },
+        { "name": "allowed", "type": "bool" }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "recordHash",
+      "inputs": [{ "name": "digest", "type": "bytes32" }],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "getRecord",
+      "inputs": [{ "name": "digest", "type": "bytes32" }],
+      "outputs": [
+        { "name": "timestamp", "type": "uint256" },
+        { "name": "recorder", "type": "address" }
+      ],
+      "stateMutability": "view"
+    }
+  ]
+}

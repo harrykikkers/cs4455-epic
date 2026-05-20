@@ -1,11 +1,8 @@
 
 /**
  * AuthService handles registration and login.
- * Receives a UserRepository and a HashStrategy via constructor injection
- * (wired by ServiceFactory).
- *
- * The hash strategy is Argon2id in production — see HashStrategy.js
- * for parameter justification.
+ * Receives a UserRepository and a PasswordHasher via constructor injection
+ * (wired in app.js).
  */
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
@@ -15,9 +12,9 @@ const logger = require('../utils/logger');
 const { audit } = require('../utils/logger');
 
 class AuthService {
-  constructor(userRepository, hashStrategy) {
+  constructor(userRepository, passwordHasher) {
     this._userRepo = userRepository;
-    this._hashStrategy = hashStrategy;
+    this._passwordHasher = passwordHasher;
   }
 
   async register({ username, password }) {
@@ -27,7 +24,7 @@ class AuthService {
     // that's a deliberate UX trade-off, since users have to be told to
     // pick a different name. The 5-req/hour rate limit on /api/auth/register
     // (see app.js) is the primary defence against scripted enumeration.
-    const passwordHash = await this._hashStrategy.hash(password);
+    const passwordHash = await this._passwordHasher.hash(password);
 
     const existing = await this._userRepo.findByUsername(username);
     if (existing) {
@@ -49,12 +46,12 @@ class AuthService {
       // try/catch because argon2.hash throws on empty/non-string input —
       // without it, a missing user with a malformed password would 500
       // instead of 401 and leak existence via the status code.
-      try { await this._hashStrategy.hash(password); } catch { /* intentionally ignored */ }
+      try { await this._passwordHasher.hash(password); } catch { /* intentionally ignored */ }
       audit.warn(`auth.login.failure reason=unknown_user attempted_username=${username}`);
       throw new UnauthorisedError('Invalid username or password');
     }
 
-    const valid = await this._hashStrategy.verify(password, user.password_hash);
+    const valid = await this._passwordHasher.verify(password, user.password_hash);
     if (!valid) {
       audit.warn(`auth.login.failure reason=bad_password user=${user.username} userId=${user.user_id}`);
       throw new UnauthorisedError('Invalid username or password');
@@ -88,12 +85,12 @@ class AuthService {
       throw new UnauthorisedError('User not found');
     }
 
-    const valid = await this._hashStrategy.verify(currentPassword, user.password_hash);
+    const valid = await this._passwordHasher.verify(currentPassword, user.password_hash);
     if (!valid) {
       throw new UnauthorisedError('Current password is incorrect');
     }
 
-    const newHash = await this._hashStrategy.hash(newPassword);
+    const newHash = await this._passwordHasher.hash(newPassword);
     await this._userRepo.updatePassword(userId, newHash);
 
     logger.info(`Password changed for user: ${user.username}`);

@@ -1,13 +1,13 @@
 const AuthService = require('../../src/services/AuthService');
 const UserRepository = require('../../src/repositories/UserRepository');
-const { Argon2Strategy } = require('../../src/patterns/strategy/HashStrategy');
+const PasswordHasher = require('../../src/services/PasswordHasher');
 const { ConflictError, UnauthorisedError } = require('../../src/utils/errors');
 const { makeFakePool } = require('../helpers/fakePool');
 
 /**
  * Every test below wires AuthService with:
  *   - the real UserRepository class (src/repositories/UserRepository.js)
- *   - the real Argon2Strategy (src/patterns/strategy/HashStrategy.js)
+ *   - the real PasswordHasher (src/services/PasswordHasher.js)
  *   - a fake mysql2 pool whose only job is to back the repo with an
  *     in-memory store (tests/helpers/fakePool.js)
  *
@@ -19,22 +19,22 @@ const { makeFakePool } = require('../helpers/fakePool');
 function build() {
   const pool = makeFakePool();
   const userRepo = new UserRepository(pool);
-  const hashStrategy = new Argon2Strategy();
-  const svc = new AuthService(userRepo, hashStrategy);
-  return { pool, userRepo, hashStrategy, svc };
+  const passwordHasher = new PasswordHasher();
+  const svc = new AuthService(userRepo, passwordHasher);
+  return { pool, userRepo, passwordHasher, svc };
 }
 
 describe('AuthService', () => {
   describe('register', () => {
     test('hashes the password BEFORE checking username uniqueness (timing-safe)', async () => {
-      const { hashStrategy, userRepo, svc } = build();
+      const { passwordHasher, userRepo, svc } = build();
 
       // Record call order without replacing implementations — the spies
       // call through to the real argon2 hash and real repo lookup.
       const order = [];
-      const realHash = hashStrategy.hash.bind(hashStrategy);
+      const realHash = passwordHasher.hash.bind(passwordHasher);
       const realFind = userRepo.findByUsername.bind(userRepo);
-      jest.spyOn(hashStrategy, 'hash').mockImplementation(async (pw) => {
+      jest.spyOn(passwordHasher, 'hash').mockImplementation(async (pw) => {
         order.push('hash');
         return realHash(pw);
       });
@@ -93,8 +93,8 @@ describe('AuthService', () => {
     });
 
     test('burns time by hashing even when the user does not exist', async () => {
-      const { hashStrategy, svc } = build();
-      const hashSpy = jest.spyOn(hashStrategy, 'hash');
+      const { passwordHasher, svc } = build();
+      const hashSpy = jest.spyOn(passwordHasher, 'hash');
 
       await svc.login({ username: 'ghost', password: 'whatever' }).catch(() => {});
 

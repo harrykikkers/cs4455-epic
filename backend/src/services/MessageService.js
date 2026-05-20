@@ -4,37 +4,51 @@
  *
  * The server only ever handles ciphertext. It cannot read, decrypt,
  * or verify message contents. All encryption happens client-side.
- *
- * Uses the Observer pattern (EventBus) to notify the blockchain module
- * when messages are sent, without depending on it directly.
  */
 const { v4: uuidv4 } = require('uuid');
 const { NotFoundError, ForbiddenError } = require('../utils/errors');
 const logger = require('../utils/logger');
 
 class MessageService {
-  constructor(messageRepository, eventBus) {
+  constructor(messageRepository, blockchainService) {
     this._messageRepo = messageRepository;
-    this._eventBus = eventBus;
+    this._blockchain = blockchainService;
   }
 
-  async sendMessage({ senderId, recipientId, ciphertext, nonce }) {
+  async sendMessage({ senderId, recipientId, ciphertext, nonce, digest }) {
     const messageId = uuidv4();
 
     await this._messageRepo.create({
-      messageId, senderId, recipientId, ciphertext, nonce,
+      messageId, senderId, recipientId, ciphertext, nonce, digestHash: digest,
     });
 
-    await this._eventBus.emit('message:sent', {
-      messageId,
-      senderId,
-      recipientId,
-      ciphertext,
-      timestamp: new Date().toISOString(),
-    });
+    // Hand the client-supplied digest to the blockchain service. The server
+    // never computes the digest itself — it relays whatever the client
+    // committed to. That's what makes the on-chain record a proof of the
+    // plaintext rather than a proof of "what the server stored".
+    // BlockchainService swallows its own errors and flags chain_failed on
+    // the row, so a Sepolia outage never blocks message delivery.
+    await this._blockchain.onMessageSent({ messageId, digestHash: digest });
 
     logger.info(`Message sent: ${messageId} from ${senderId} to ${recipientId}`);
     return { messageId };
+  }
+
+  /**
+   * Returns the chain proof for a message the caller has access to.
+   * Used by GET /api/messages/:id/chain — the verification page feeds the
+   * returned txHash into Sepolia directly to confirm.
+   */
+  async getChainProof(messageId, userId) {
+    const message = await this.getMessage(messageId, userId);
+    const record = await this._messageRepo.findChainRecord(messageId);
+    return {
+      messageId,
+      digestHash: message.digest_hash || null,
+      chainStatus: message.chain_status,
+      txHash: record ? record.tx_hash : null,
+      recordedAt: record ? record.created_at : null,
+    };
   }
 
   async getInbox(userId, options) {
@@ -79,15 +93,8 @@ class MessageService {
       nonce,
     });
 
-    await this._eventBus.emit('message:forwarded', {
-      shareId: id,
-      messageId,
-      forwarderId,
-      recipientId,
-      ciphertext,
-      timestamp: new Date().toISOString(),
-    });
-
+    // Forwards do not trigger a new chain write — the original message's
+    // chain record already attests to the plaintext that was forwarded.
     logger.info(`Message ${messageId} forwarded to ${recipientId}`);
     return { id };
   }

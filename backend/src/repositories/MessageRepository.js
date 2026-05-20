@@ -5,14 +5,14 @@ class MessageRepository {
     this._pool = pool;
   }
 
-  async create({ messageId, senderId, recipientId, ciphertext, nonce }) {
+  async create({ messageId, senderId, recipientId, ciphertext, nonce, digestHash }) {
     const sql = `
       INSERT INTO messages
-        (message_id, sender_id, recipient_id, ciphertext, nonce, created_at)
-      VALUES (?, ?, ?, ?, ?, NOW())
+        (message_id, sender_id, recipient_id, ciphertext, nonce, digest_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, NOW())
     `;
     try {
-      await this._pool.execute(sql, [messageId, senderId, recipientId, ciphertext, nonce]);
+      await this._pool.execute(sql, [messageId, senderId, recipientId, ciphertext, nonce, digestHash]);
     } catch (err) {
       // Unique (recipient_id, nonce) — an active attacker replaying a
       // captured ciphertext+nonce hits this. AEAD already prevents the
@@ -23,6 +23,60 @@ class MessageRepository {
       }
       throw err;
     }
+  }
+
+  /**
+   * Record a successful Sepolia write for a message. Called by BlockchainService
+   * after `contract.recordHash(...)` confirms — atomically inserts the chain
+   * record and flips messages.chain_status to 'recorded'.
+   */
+  async recordChainEntry({ id, messageId, txHash, digestHash }) {
+    const conn = await this._pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        'INSERT INTO blockchain_records (id, message_id, tx_hash, digest_hash) VALUES (?, ?, ?, ?)',
+        [id, messageId, txHash, digestHash]
+      );
+      await conn.execute(
+        'UPDATE messages SET chain_status = ? WHERE message_id = ?',
+        ['recorded', messageId]
+      );
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
+   * Flag a message's chain write as failed so a retry worker (or operator)
+   * can pick it up later. Swallow errors — failing to record the failure
+   * shouldn't crash the message delivery path.
+   */
+  async markChainFailed(messageId) {
+    await this._pool.execute(
+      'UPDATE messages SET chain_status = ? WHERE message_id = ?',
+      ['failed', messageId]
+    );
+  }
+
+  /**
+   * Latest chain record for a message, if any. Used by GET /api/messages/:id/chain
+   * to surface txHash and digest to the verification page.
+   */
+  async findChainRecord(messageId) {
+    const [rows] = await this._pool.execute(
+      `SELECT id, tx_hash, digest_hash, created_at
+       FROM blockchain_records
+       WHERE message_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [messageId]
+    );
+    return rows[0] || null;
   }
 
   async findById(messageId) {

@@ -5,11 +5,20 @@ const rateLimit = require('express-rate-limit');
 
 const config = require('./config');
 const { getPool } = require('./config/database');
-const ServiceFactory = require('./patterns/factory/ServiceFactory');
 const mountRoutes = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
 const requestId = require('./middleware/requestId');
 const logger = require('./utils/logger').child({ component: 'app' });
+
+const UserRepository = require('./repositories/UserRepository');
+const MessageRepository = require('./repositories/MessageRepository');
+const KeyRepository = require('./repositories/KeyRepository');
+
+const AuthService = require('./services/AuthService');
+const MessageService = require('./services/MessageService');
+const BlockchainService = require('./services/BlockchainService');
+const KeyService = require('./services/KeyService');
+const PasswordHasher = require('./services/PasswordHasher');
 
 async function bootstrap() {
   // Fail fast on missing secrets before anything else happens.
@@ -81,12 +90,25 @@ async function bootstrap() {
   // so oversized bodies are dropped before they reach Node.
   app.use(express.json({ limit: '256kb' }));
 
-  // ── Dependency wiring (Factory pattern) ──────────────────────
+  // ── Dependency wiring ────────────────────────────────────────
+  // Build repositories on the shared pool, then assemble services on top.
+  // BlockchainService is constructed eagerly so its Sepolia provider is
+  // ready before the first POST /api/messages fires. MessageService takes
+  // it as a direct collaborator — no event bus indirection.
   const pool = getPool();
-  const serviceFactory = new ServiceFactory(pool);
+  const userRepo = new UserRepository(pool);
+  const messageRepo = new MessageRepository(pool);
+  const keyRepo = new KeyRepository(pool);
+
+  const blockchainService = new BlockchainService(messageRepo);
+  const services = {
+    authService: new AuthService(userRepo, new PasswordHasher()),
+    messageService: new MessageService(messageRepo, blockchainService),
+    keyService: new KeyService(keyRepo),
+  };
 
   // ── Routes ───────────────────────────────────────────────────
-  mountRoutes(app, serviceFactory);
+  mountRoutes(app, services);
 
   // ── Global error handler (must be last) ──────────────────────
   app.use(errorHandler);

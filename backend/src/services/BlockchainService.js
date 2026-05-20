@@ -1,102 +1,100 @@
 
 /**
- * BlockchainService — writes message digest hashes to Ethereum Sepolia.
+ * BlockchainService — writes client-supplied message digests to the
+ * MessageDigest contract on Ethereum Sepolia.
  *
- * Subscribes to the EventBus 'message:sent' event (Observer pattern)
- * so it runs automatically whenever a message is sent, without the
- * MessageService knowing about blockchain at all.
+ * The digest is computed by the client (keccak256 of the plaintext) and
+ * passed in by MessageService when a message is sent. This service does
+ * not hash anything — it relays the commitment the client made, which is
+ * what makes the on-chain record a proof of the plaintext rather than of
+ * server-controlled ciphertext.
  *
- * Uses the Keccak256Strategy (Strategy pattern) for hashing. The
- * MessageRepository dependency exists so we can write the transaction
- * hash back to the messages row after a successful chain write.
+ * On chain-write failure, the message row is flagged chain_status='failed'
+ * so a future retry worker (or an operator) can pick it up. Delivery is
+ * never blocked by a Sepolia outage.
  */
 const { ethers } = require('ethers');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../config');
 const logger = require('../utils/logger');
 
-const CONTRACT_ABI = [
-  'function recordHash(bytes32 messageHash) external',
-  'function getRecord(bytes32 messageHash) external view returns (uint256 timestamp, address recorder)',
-  'event HashRecorded(bytes32 indexed messageHash, uint256 timestamp, address recorder)',
-];
+// Contract address + ABI live in the deployment artefact produced by
+// contracts/DEPLOY.md. Both the backend and the (future) verification
+// page read from the same JSON so they can never drift apart.
+const deployment = require('../../../contracts/deployments/sepolia.json');
 
 class BlockchainService {
-  constructor(hashStrategy, eventBus, dbPool) {
-    this._hashStrategy = hashStrategy;
-    this._pool = dbPool;
+  constructor(messageRepo) {
+    this._messageRepo = messageRepo;
     this._provider = null;
     this._wallet = null;
     this._contract = null;
-
-    eventBus.on('message:sent', (payload) => this._onMessageSent(payload));
-    eventBus.on('message:forwarded', (payload) => this._onMessageSent(payload));
   }
 
   _getContract() {
-    if (!this._contract) {
-      if (!config.blockchain.rpcUrl || !config.blockchain.privateKey) {
-        logger.warn('Blockchain not configured — skipping chain writes');
-        return null;
-      }
-      this._provider = new ethers.JsonRpcProvider(config.blockchain.rpcUrl);
-      this._wallet = new ethers.Wallet(config.blockchain.privateKey, this._provider);
-      this._contract = new ethers.Contract(
-        config.blockchain.contractAddress,
-        CONTRACT_ABI,
-        this._wallet
-      );
+    if (this._contract) return this._contract;
+
+    const { rpcUrl, privateKey, contractAddress } = config.blockchain;
+    const address = contractAddress || deployment.address;
+
+    if (!rpcUrl || !privateKey || !address) {
+      // Not a hard error — local dev and CI both run without Sepolia creds.
+      // The message still gets delivered; chain_status stays 'pending'.
+      logger.warn('Blockchain not configured — skipping chain writes');
+      return null;
     }
+
+    this._provider = new ethers.JsonRpcProvider(rpcUrl);
+    this._wallet = new ethers.Wallet(privateKey, this._provider);
+    this._contract = new ethers.Contract(address, deployment.abi, this._wallet);
     return this._contract;
   }
 
-  async _onMessageSent({ messageId, ciphertext }) {
+  /**
+   * Called by MessageService after a message row is persisted. Wraps
+   * recordDigest with the failure-handling logic so a Sepolia outage marks
+   * the message chain_failed instead of bubbling up and 500-ing the API.
+   */
+  async onMessageSent({ messageId, digestHash }) {
     try {
-      const result = await this.recordDigest(messageId, ciphertext);
+      const result = await this.recordDigest(messageId, digestHash);
       if (result) {
         logger.info(`Blockchain digest recorded for message ${messageId}: ${result.txHash}`);
       }
     } catch (err) {
       logger.error(`Blockchain write failed for message ${messageId}:`, err);
+      try {
+        await this._messageRepo.markChainFailed(messageId);
+      } catch (markErr) {
+        logger.error(`Failed to mark message ${messageId} as chain_failed:`, markErr);
+      }
     }
   }
 
-  async recordDigest(messageId, data) {
+  /**
+   * Record a digest on Sepolia and persist the resulting txHash. Returns
+   * { txHash, digestHash } on success, or null if blockchain is unconfigured.
+   *
+   * The digest comes from the client — we do not recompute or validate it
+   * against the ciphertext. The bytes32 type already enforces the 32-byte
+   * length via ethers; malformed input throws before any tx is sent.
+   */
+  async recordDigest(messageId, digestHash) {
     const contract = this._getContract();
     if (!contract) return null;
 
-    const digestHash = await this._hashStrategy.hash(data);
     const tx = await contract.recordHash(digestHash);
     const receipt = await tx.wait();
     const txHash = receipt.hash;
 
-    // Write to blockchain_records table
-    const id = uuidv4();
-    await this._pool.execute(
-      'INSERT INTO blockchain_records (id, message_id, tx_hash, digest_hash) VALUES (?, ?, ?, ?)',
-      [id, messageId, txHash, digestHash]
-    );
+    await this._messageRepo.recordChainEntry({
+      id: uuidv4(),
+      messageId,
+      txHash,
+      digestHash,
+    });
 
     return { txHash, digestHash };
-  }
-
-  async verifyDigest(data) {
-    const contract = this._getContract();
-    if (!contract) return { verified: false, reason: 'Blockchain not configured' };
-
-    const hash = await this._hashStrategy.hash(data);
-    const record = await contract.getRecord(hash);
-
-    if (record.timestamp === 0n) {
-      return { verified: false, reason: 'No on-chain record found' };
-    }
-
-    return {
-      verified: true,
-      hash,
-      timestamp: Number(record.timestamp),
-      recorder: record.recorder,
-    };
   }
 }
 

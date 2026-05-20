@@ -10,34 +10,25 @@ Backend server for the CS4455 Epic Project secure messaging application.
 - **Blockchain**: ethers.js → Ethereum Sepolia testnet
 - **Security**: Helmet, CORS, rate limiting, input validation
 
-## Design Patterns (GoF)
-
-| Pattern | Where | Why |
-|---------|-------|-----|
-| **Singleton** | `database.js` — MySQL connection pool | Prevents duplicate pools; one shared instance |
-| **Observer** | `EventBus.js` — event pub/sub | Decouples message sending from blockchain recording |
-| **Strategy** | `HashStrategy.js` — Argon2id / Keccak256 | Same interface for different hashing algorithms |
-| **Factory** | `ServiceFactory.js` — service creation | Centralises dependency wiring; simplifies testing |
-
 ## Project Structure
 
 ```
 backend/
 ├── src/
-│   ├── app.js                  # Entry point — composes and starts the server
+│   ├── app.js                  # Entry point — wires repos + services, starts the server
 │   ├── config/
 │   │   ├── index.js            # Environment config (single source of truth)
-│   │   └── database.js         # MySQL pool (Singleton)
+│   │   └── database.js         # MySQL connection pool
 │   ├── controllers/            # Thin HTTP handlers — parse request, call service, format response
 │   │   ├── AuthController.js
 │   │   ├── MessageController.js
-│   │   ├── KeyController.js
-│   │   └── BlockchainController.js
+│   │   └── KeyController.js
 │   ├── middleware/
 │   │   ├── auth.js             # JWT verification
 │   │   ├── errorHandler.js     # Global error handler
+│   │   ├── requestId.js        # Per-request UUID for log correlation
 │   │   └── validate.js         # Input validation rules (express-validator)
-│   ├── repositories/           # Data access layer — raw SQL, no business logic
+│   ├── repositories/           # Data access layer — parameterised SQL, no business logic
 │   │   ├── UserRepository.js
 │   │   ├── MessageRepository.js
 │   │   └── KeyRepository.js
@@ -45,20 +36,13 @@ backend/
 │   │   ├── index.js            # Mounts all route groups
 │   │   ├── auth.js
 │   │   ├── messages.js
-│   │   ├── keys.js
-│   │   └── blockchain.js
+│   │   └── keys.js
 │   ├── services/               # Business logic layer
 │   │   ├── AuthService.js      # Registration, login, JWT
 │   │   ├── MessageService.js   # Send, receive, forward, revoke
-│   │   ├── BlockchainService.js# Hash recording on Sepolia
-│   │   └── KeyService.js       # Public key management (TOFU)
-│   ├── patterns/
-│   │   ├── observer/
-│   │   │   └── EventBus.js     # GoF Observer — event pub/sub
-│   │   ├── strategy/
-│   │   │   └── HashStrategy.js # GoF Strategy — pluggable hashing
-│   │   └── factory/
-│   │       └── ServiceFactory.js # GoF Factory — dependency wiring
+│   │   ├── BlockchainService.js# Sepolia digest recording
+│   │   ├── KeyService.js       # Public key management (TOFU)
+│   │   └── PasswordHasher.js   # Argon2id wrapper injected into AuthService
 │   └── utils/
 │       ├── logger.js           # Winston structured logging
 │       └── errors.js           # Custom error hierarchy
@@ -111,18 +95,38 @@ npm start
 | POST | `/api/auth/register` | No | Create account |
 | POST | `/api/auth/login` | No | Get JWT token |
 | GET | `/api/auth/me` | Yes | Current user info |
-| POST | `/api/messages` | Yes | Send encrypted message |
+| POST | `/api/messages` | Yes | Send encrypted message — body must include `{ recipientId, ciphertext, nonce, digest }` where `digest` is the client-computed keccak256 of plaintext (0x + 64 hex) |
 | GET | `/api/messages/inbox` | Yes | List received messages |
 | GET | `/api/messages/sent` | Yes | List sent messages |
 | GET | `/api/messages/:id` | Yes | Get single message |
+| GET | `/api/messages/:id/chain` | Yes | Chain proof: `{ digestHash, chainStatus, txHash, recordedAt }` — feed `txHash` into the standalone verification page |
 | POST | `/api/messages/:id/forward` | Yes | Forward to another user |
 | POST | `/api/messages/:id/revoke` | Yes | Revoke shared access |
 | DELETE | `/api/messages/:id` | Yes | Soft-delete message |
 | POST | `/api/keys` | Yes | Publish public key |
 | GET | `/api/keys` | Yes | List all public keys |
 | GET | `/api/keys/:userId` | Yes | Get user's public key |
-| POST | `/api/blockchain/verify` | No | Verify message hash on-chain |
 | GET | `/api/health` | No | Health check |
+
+### Blockchain integration
+
+The server **does not** compute message digests. The client computes
+`keccak256(plaintext)` before encrypting and sends the resulting 32-byte
+hex string as the `digest` field of `POST /api/messages`. On `message:sent`,
+`BlockchainService` writes that digest to the `MessageDigest` contract on
+Sepolia via `contract.recordHash(digest)`, stores `(message_id, tx_hash,
+digest_hash)` in `blockchain_records`, and flips `messages.chain_status`
+to `recorded`.
+
+The contract source is at [`contracts/src/MessageDigest.sol`](../contracts/src/MessageDigest.sol);
+deployment instructions are at [`contracts/DEPLOY.md`](../contracts/DEPLOY.md);
+the address + ABI live in [`contracts/deployments/sepolia.json`](../contracts/deployments/sepolia.json)
+and are imported at runtime — there is no inline ABI in the JS.
+
+The standalone verification page (separate from this API, per the brief)
+takes plaintext + a `txHash` from `GET /api/messages/:id/chain`, recomputes
+`keccak256(plaintext)` in the browser, fetches the on-chain
+`HashRecorded` event for that tx, and compares.
 
 ## Database Schema
 

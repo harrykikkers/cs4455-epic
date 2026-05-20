@@ -48,6 +48,12 @@ const validate = {
     body('recipientId').isUUID().withMessage('Valid recipient ID required'),
     body('ciphertext').notEmpty().withMessage('Ciphertext required'),
     body('nonce').notEmpty().withMessage('Nonce required'),
+    // Client-supplied keccak256 of the plaintext, 0x + 64 hex chars (32 bytes).
+    // The server never sees plaintext, so it cannot compute this itself —
+    // it relays whatever the client commits to, then writes it on-chain.
+    body('digest')
+      .isString().withMessage('digest must be a string')
+      .matches(/^0x[0-9a-fA-F]{64}$/).withMessage('digest must be 0x + 64 hex chars (keccak256)'),
     handleValidation,
   ],
 
