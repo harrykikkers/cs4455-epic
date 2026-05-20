@@ -10,6 +10,20 @@ Backend server for the CS4455 Epic Project secure messaging application.
 - **Blockchain**: ethers.js → Ethereum Sepolia testnet
 - **Security**: Helmet, CORS, rate limiting, input validation
 
+## Backend Flow
+
+Routes \
+  ↓
+Middleware \
+  ↓
+Controllers \
+  ↓
+Services \
+  ↓
+Repositories \
+  ↓
+Database / external systems 
+
 ## Project Structure
 
 ```

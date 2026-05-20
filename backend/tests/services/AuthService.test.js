@@ -120,7 +120,7 @@ describe('AuthService', () => {
     });
   });
 
-  describe('verifyToken', () => {
+  describe('token', () => {
     test('rejects a token issued before the user changed their password', async () => {
       const { svc, pool } = build();
       await svc.register({ username: 'alice', password: 'p'.repeat(12) });
@@ -161,5 +161,104 @@ describe('AuthService', () => {
       expect(decoded.sub).toBe(userId);
       expect(decoded.username).toBe('alice');
     });
+
+    test('rejects expired tokens', async () => {
+      const { svc } = build();
+
+      await svc.register({
+        username: 'alice',
+        password: 'p'.repeat(12),
+      });
+
+      const { token } = await svc.login({
+        username: 'alice',
+        password: 'p'.repeat(12),
+      });
+
+      // Mock time forward so jwt.verify sees token as expired
+      const realNow = Date.now;
+      Date.now = () => realNow() + 60 * 60 * 1000 * 24; // +1 day
+
+      await expect(svc.verifyToken(token)).rejects.toBeInstanceOf(UnauthorisedError);
+
+      Date.now = realNow;
+    });
+
+    test('rejects tokens with invalid signatures', async () => {
+      const { svc } = build();
+
+      await svc.register({
+        username: 'alice',
+        password: 'p'.repeat(12),
+      });
+
+      const { token } = await svc.login({
+        username: 'alice',
+        password: 'p'.repeat(12),
+      });
+
+      const tampered = token.replace(/\.$/, '') + 'x';
+
+      await expect(svc.verifyToken(tampered)).rejects.toBeInstanceOf(UnauthorisedError);
+    });
   });
+
+  test('rejects malformed JWTs', async () => {
+    const { svc } = build();
+
+    await expect(
+      svc.verifyToken('this.is.not.a.jwt')
+    ).rejects.toBeInstanceOf(UnauthorisedError);
+  });
+
+  describe('changePassword', () => {
+    test('changes password successfully and invalidates old password', async () => {
+      const { svc } = build();
+
+      const { userId } = await svc.register({
+        username: 'alice',
+        password: 'oldpassword123',
+      });
+
+      await svc.changePassword({
+        userId,
+        currentPassword: 'oldpassword123',
+        newPassword: 'newpassword123',
+      });
+
+      await expect(
+        svc.login({
+          username: 'alice',
+          password: 'oldpassword123',
+        })
+      ).rejects.toBeInstanceOf(UnauthorisedError);
+
+      const result = await svc.login({
+        username: 'alice',
+        password: 'newpassword123',
+      });
+
+      expect(result.token).toBeTruthy();
+    });
+
+    test('rejects password change with incorrect current password', async () => {
+      const { svc } = build();
+
+      const { userId } = await svc.register({
+        username: 'alice',
+        password: 'oldpassword123',
+      });
+
+      await expect(
+        svc.changePassword({
+          userId,
+          currentPassword: 'wrongpassword',
+          newPassword: 'newpassword123',
+        })
+      ).rejects.toBeInstanceOf(UnauthorisedError);
+    });
+
+
+  });
+  
 });

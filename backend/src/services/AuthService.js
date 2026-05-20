@@ -34,7 +34,6 @@ class AuthService {
     const userId = uuidv4();
     await this._userRepo.create({ userId, username, passwordHash });
 
-    logger.info(`User registered: ${username}`);
     audit.info(`auth.register.success user=${username} userId=${userId}`);
     return { userId, username };
   }
@@ -47,7 +46,11 @@ class AuthService {
       // without it, a missing user with a malformed password would 500
       // instead of 401 and leak existence via the status code.
       try { await this._passwordHasher.hash(password); } catch { /* intentionally ignored */ }
-      audit.warn(`auth.login.failure reason=unknown_user attempted_username=${username}`);
+      audit.warn({
+        event: 'auth.login.failure',
+        reason: 'unknown_user',
+        attempted_username: username,
+      });
       throw new UnauthorisedError('Invalid username or password');
     }
 
@@ -71,7 +74,6 @@ class AuthService {
       { expiresIn: config.jwt.expiresIn }
     );
 
-    logger.info(`User logged in: ${username}`);
     audit.info(`auth.login.success user=${user.username} userId=${user.user_id}`);
     return {
       token,
@@ -93,29 +95,43 @@ class AuthService {
     const newHash = await this._passwordHasher.hash(newPassword);
     await this._userRepo.updatePassword(userId, newHash);
 
-    logger.info(`Password changed for user: ${user.username}`);
     audit.info(`auth.password.changed user=${user.username} userId=${userId}`);
   }
 
   async verifyToken(token) {
-    const decoded = jwt.verify(token, config.jwt.secret);
+  let decoded;
 
-    // DB-side check: refuse tokens whose pwdChangedAt stamp predates the
-    // user's current password_changed_at. This is what makes a password
-    // change immediately invalidate every outstanding session, instead of
-    // waiting for the token to expire on its own.
-    const user = await this._userRepo.findById(decoded.sub);
-    if (!user) {
-      throw new UnauthorisedError('User no longer exists');
-    }
-    const current = pwdChangedAtSeconds(user);
-    if (!decoded.pwdChangedAt || decoded.pwdChangedAt < current) {
-      audit.warn(`auth.token.invalidated user=${user.username} userId=${user.user_id} reason=password_changed`);
-      throw new UnauthorisedError('Token invalidated by password change');
-    }
-
-    return decoded;
+  try {
+    decoded = jwt.verify(token, config.jwt.secret);
+  } catch (err) {
+    audit.warn(`auth.token.rejected reason=${err.name}`);
+    throw new UnauthorisedError('Invalid or expired token');
   }
+
+  // DB-side check: refuse tokens whose pwdChangedAt stamp predates the
+  // user's current password_changed_at. This is what makes a password
+  // change immediately invalidate every outstanding session, instead of
+  // waiting for the token to expire on its own.
+  const user = await this._userRepo.findById(decoded.sub);
+
+  if (!user) {
+    throw new UnauthorisedError('User no longer exists');
+  }
+
+  const current = pwdChangedAtSeconds(user);
+
+  if (!decoded.pwdChangedAt || decoded.pwdChangedAt < current) {
+    audit.warn(
+      `auth.token.invalidated user=${user.username} userId=${user.user_id} reason=password_changed`
+    );
+
+    throw new UnauthorisedError(
+      'Token invalidated by password change'
+    );
+  }
+
+  return decoded;
+}
 }
 
 /** Unix-seconds stamp of the user's current password version. */
