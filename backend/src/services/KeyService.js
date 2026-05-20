@@ -16,6 +16,7 @@
  */
 const { ConflictError, NotFoundError } = require('../utils/errors');
 const logger = require('../utils/logger');
+const { audit } = require('../utils/logger');
 
 class KeyService {
   constructor(keyRepository) {
@@ -28,6 +29,7 @@ class KeyService {
     if (!current) {
       const { version } = await this._keyRepo.insertFirst({ userId, publicKey, keyType });
       logger.info(`Public key (${keyType}) pinned for user ${userId} v${version}`);
+      audit.info(`key.published userId=${userId} keyType=${keyType} version=${version} status=pinned`);
       return { status: 'pinned', version };
     }
 
@@ -37,6 +39,7 @@ class KeyService {
     }
 
     if (!acknowledgeRotation) {
+      audit.warn(`key.rotation.refused userId=${userId} keyType=${keyType} reason=no_acknowledgement`);
       // Refuse to overwrite. The client must re-submit with
       // acknowledgeRotation: true after the user confirms the change.
       throw new ConflictError(
@@ -52,6 +55,7 @@ class KeyService {
       newPublicKey: publicKey,
     });
     logger.warn(`Public key (${keyType}) ROTATED for user ${userId} v${version}`);
+    audit.warn(`key.rotated userId=${userId} keyType=${keyType} version=${version} previousVersion=${current.version}`);
     return { status: 'rotated', version, previousVersion: current.version };
   }
 

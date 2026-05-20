@@ -12,6 +12,7 @@ const { v4: uuidv4 } = require('uuid');
 const config = require('../config');
 const { ConflictError, UnauthorisedError } = require('../utils/errors');
 const logger = require('../utils/logger');
+const { audit } = require('../utils/logger');
 
 class AuthService {
   constructor(userRepository, hashStrategy) {
@@ -21,7 +22,11 @@ class AuthService {
 
   async register({ username, password }) {
     // Hash unconditionally before the uniqueness check so register-time
-    // latency doesn't leak whether the username is already taken.
+    // latency doesn't leak whether the username is already taken. The
+    // _response_ still differentiates (409 CONFLICT for a taken name) —
+    // that's a deliberate UX trade-off, since users have to be told to
+    // pick a different name. The 5-req/hour rate limit on /api/auth/register
+    // (see app.js) is the primary defence against scripted enumeration.
     const passwordHash = await this._hashStrategy.hash(password);
 
     const existing = await this._userRepo.findByUsername(username);
@@ -33,6 +38,7 @@ class AuthService {
     await this._userRepo.create({ userId, username, passwordHash });
 
     logger.info(`User registered: ${username}`);
+    audit.info(`auth.register.success user=${username} userId=${userId}`);
     return { userId, username };
   }
 
@@ -44,11 +50,13 @@ class AuthService {
       // without it, a missing user with a malformed password would 500
       // instead of 401 and leak existence via the status code.
       try { await this._hashStrategy.hash(password); } catch { /* intentionally ignored */ }
+      audit.warn(`auth.login.failure reason=unknown_user attempted_username=${username}`);
       throw new UnauthorisedError('Invalid username or password');
     }
 
     const valid = await this._hashStrategy.verify(password, user.password_hash);
     if (!valid) {
+      audit.warn(`auth.login.failure reason=bad_password user=${user.username} userId=${user.user_id}`);
       throw new UnauthorisedError('Invalid username or password');
     }
 
@@ -67,6 +75,7 @@ class AuthService {
     );
 
     logger.info(`User logged in: ${username}`);
+    audit.info(`auth.login.success user=${user.username} userId=${user.user_id}`);
     return {
       token,
       user: { userId: user.user_id, username: user.username },
@@ -88,6 +97,7 @@ class AuthService {
     await this._userRepo.updatePassword(userId, newHash);
 
     logger.info(`Password changed for user: ${user.username}`);
+    audit.info(`auth.password.changed user=${user.username} userId=${userId}`);
   }
 
   async verifyToken(token) {
@@ -103,6 +113,7 @@ class AuthService {
     }
     const current = pwdChangedAtSeconds(user);
     if (!decoded.pwdChangedAt || decoded.pwdChangedAt < current) {
+      audit.warn(`auth.token.invalidated user=${user.username} userId=${user.user_id} reason=password_changed`);
       throw new UnauthorisedError('Token invalidated by password change');
     }
 

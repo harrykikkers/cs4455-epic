@@ -23,9 +23,10 @@ const config = {
   jwt: {
     // No insecure fallback — bootstrap validates this is set before listen().
     secret: process.env.JWT_SECRET,
-    // Default matches .env.example. Short-lived tokens keep the
+    // Default matches .env.example: 1h. Short-lived tokens keep the
     // damage window small when password_changed_at invalidation lags
-    // (e.g. read replicas, caches).
+    // (e.g. read replicas, caches). Longer windows would require a
+    // refresh-token flow which isn't implemented.
     expiresIn: process.env.JWT_EXPIRES_IN || '1h',
   },
 

@@ -8,6 +8,7 @@ const { getPool } = require('./config/database');
 const ServiceFactory = require('./patterns/factory/ServiceFactory');
 const mountRoutes = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
+const requestId = require('./middleware/requestId');
 const logger = require('./utils/logger').child({ component: 'app' });
 
 async function bootstrap() {
@@ -21,6 +22,12 @@ async function bootstrap() {
   // Without this the auth limiter becomes a global counter behind a proxy.
   app.set('trust proxy', 1);
 
+  // ── Request correlation ───────────────────────────────────────
+  // Stamp every request with a UUID before any other middleware runs so
+  // that rate-limit denials, validation errors, and unhandled exceptions
+  // all carry the same correlation ID — essential for the pentest report.
+  app.use(requestId);
+
   // ── Security middleware ───────────────────────────────────────
   // Helmet sets secure HTTP headers (X-Content-Type-Options,
   // X-Frame-Options, Strict-Transport-Security, etc.)
@@ -33,23 +40,46 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   }));
 
-  // Rate limiting — prevents brute-force attacks on auth endpoints
+  // ── Rate limiting ─────────────────────────────────────────────
+  // Brute-force resilience on auth endpoints. The express-rate-limit
+  // middleware tracks per-IP (req.ip is correct because of `trust proxy 1`).
+  //
+  // Register has its own stricter limit because the endpoint inherently
+  // confirms username existence (409 vs 201) — a UX necessity, but it
+  // means low rate limits are the primary defence against enumeration.
+  const registerLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 5,
+    message: { error: { code: 'RATE_LIMITED', message: 'Too many registration attempts' } },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use('/api/auth/register', registerLimiter);
+
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 20, // 20 attempts per window
+    max: 20, // login + password change combined
     message: { error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
+    standardHeaders: true,
+    legacyHeaders: false,
   });
   app.use('/api/auth', authLimiter);
 
-  // General rate limiter
+  // General rate limiter — outer ceiling for the rest of /api. nginx adds
+  // a second layer (10 req/s burst 20) at the edge.
   const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
   });
   app.use('/api', generalLimiter);
 
-  // Body parsing
-  app.use(express.json({ limit: '1mb' }));
+  // Body parsing. 256 KB is generous for an AEAD ciphertext + nonce + metadata
+  // and starves attackers trying to wedge the JSON parser with megabytes of
+  // input. nginx's client_max_body_size is set to the same value at the edge
+  // so oversized bodies are dropped before they reach Node.
+  app.use(express.json({ limit: '256kb' }));
 
   // ── Dependency wiring (Factory pattern) ──────────────────────
   const pool = getPool();
