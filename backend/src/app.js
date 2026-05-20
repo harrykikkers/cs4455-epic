@@ -50,8 +50,8 @@ async function bootstrap() {
 
   // Rate limiting 
   const registerLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 hour
-    max: 5,
+    windowMs: config.rateLimits.register.windowMs,
+    max: config.rateLimits.register.max,
     message: { error: { code: 'RATE_LIMITED', message: 'Too many registration attempts' } },
     standardHeaders: true,
     legacyHeaders: false,
@@ -59,8 +59,8 @@ async function bootstrap() {
   app.use('/api/auth/register', registerLimiter);
 
   const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 20, // login + password change combined
+    windowMs: config.rateLimits.auth.windowMs, // 15 minutes
+    max: config.rateLimits.auth.max, // login + password change combined
     message: { error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
     standardHeaders: true,
     legacyHeaders: false,
@@ -68,10 +68,9 @@ async function bootstrap() {
   app.use('/api/auth', authLimiter);
 
   // General rate limiter — outer ceiling for the rest of /api. nginx adds
-  // a second layer (10 req/s burst 20) at the edge.
   const generalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 200,
+    windowMs: config.rateLimits.general.windowMs,
+    max: config.rateLimits.general.max,
     standardHeaders: true,
     legacyHeaders: false,
   });

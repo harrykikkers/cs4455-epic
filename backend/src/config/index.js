@@ -41,6 +41,12 @@ const config = {
   logging: {
     errorLogPath: process.env.ERROR_LOG_PATH || 'logs/error.log',
   },
+
+  rateLimits: {
+    register: { windowMs: 3600000, max: 5 },
+    auth: { windowMs: 900000, max: 20 },
+    general: { windowMs: 900000, max: 200 },
+  },
 };
 
 function validate() {
