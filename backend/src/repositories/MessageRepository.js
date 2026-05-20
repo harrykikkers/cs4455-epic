@@ -24,6 +24,12 @@ class MessageRepository {
   }
 
   async findByRecipient(recipientId, { limit = 50, offset = 0 } = {}) {
+    // mysql2 prepared statements reject non-integer binds for LIMIT/OFFSET,
+    // and req.query values arrive as strings when express-validator's .toInt()
+    // doesn't fire (e.g. when the param is absent the destructured default
+    // is a number, but a caller passing strings would break). Coerce here.
+    const lim = Number.parseInt(limit, 10);
+    const off = Number.parseInt(offset, 10);
     const [rows] = await this._pool.execute(
       `SELECT m.message_id, m.sender_id, m.ciphertext, m.nonce,
               m.created_at, u.username AS sender_username
@@ -32,12 +38,14 @@ class MessageRepository {
        WHERE m.recipient_id = ? AND m.deleted_at IS NULL
        ORDER BY m.created_at DESC
        LIMIT ? OFFSET ?`,
-      [recipientId, limit, offset]
+      [recipientId, lim, off]
     );
     return rows;
   }
 
   async findBySender(senderId, { limit = 50, offset = 0 } = {}) {
+    const lim = Number.parseInt(limit, 10);
+    const off = Number.parseInt(offset, 10);
     const [rows] = await this._pool.execute(
       `SELECT m.message_id, m.recipient_id, m.ciphertext, m.nonce,
               m.created_at, u.username AS recipient_username
@@ -46,16 +54,17 @@ class MessageRepository {
        WHERE m.sender_id = ? AND m.deleted_at IS NULL
        ORDER BY m.created_at DESC
        LIMIT ? OFFSET ?`,
-      [senderId, limit, offset]
+      [senderId, lim, off]
     );
     return rows;
   }
 
   async softDelete(messageId, userId) {
-    await this._pool.execute(
+    const [result] = await this._pool.execute(
       'UPDATE messages SET deleted_at = NOW() WHERE message_id = ? AND (sender_id = ? OR recipient_id = ?) AND deleted_at IS NULL',
       [messageId, userId, userId]
     );
+    return result.affectedRows;
   }
 
   async findSharedWith(messageId) {

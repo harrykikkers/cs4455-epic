@@ -63,6 +63,11 @@ class MessageService {
   }
 
   async forwardMessage({ messageId, forwarderId, recipientId, ciphertext, nonce }) {
+    // Authorisation: the forwarder must have access to the message —
+    // either as the sender, the original recipient, or a current share
+    // recipient. getMessage() throws NotFoundError / ForbiddenError if not.
+    await this.getMessage(messageId, forwarderId);
+
     const id = uuidv4();
 
     await this._messageRepo.createShare({
@@ -101,7 +106,12 @@ class MessageService {
   }
 
   async deleteMessage(messageId, userId) {
-    await this._messageRepo.softDelete(messageId, userId);
+    const affected = await this._messageRepo.softDelete(messageId, userId);
+    if (!affected) {
+      // Don't distinguish "doesn't exist" from "you don't own it" — that would
+      // let an attacker probe for valid message IDs they aren't a party to.
+      throw new NotFoundError('Message not found');
+    }
     logger.info(`Message soft-deleted: ${messageId} by ${userId}`);
   }
 }
