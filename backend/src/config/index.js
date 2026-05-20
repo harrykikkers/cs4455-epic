@@ -5,35 +5,29 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 /**
  * Centralised configuration object.
- * Every module reads config from here — never from process.env directly.
- * This is the single source of truth (a lightweight Registry pattern).
+ * Every module reads config from here
  */
 const config = {
   env: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT, 10) || 3000,
+  port: parseInt(process.env.PORT, 10),
 
   db: {
     host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT, 10) || 3306,
+    port: parseInt(process.env.DB_PORT, 10),
     user: process.env.DB_USER || 'messenger',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'secure_messenger',
   },
 
   jwt: {
-    // No insecure fallback — bootstrap validates this is set before listen().
     secret: process.env.JWT_SECRET,
-    // Default matches .env.example: 1h. Short-lived tokens keep the
-    // damage window small when password_changed_at invalidation lags
-    // (e.g. read replicas, caches). Longer windows would require a
-    // refresh-token flow which isn't implemented.
-    expiresIn: process.env.JWT_EXPIRES_IN || '1h',
+    expiresIn: process.env.JWT_EXPIRES_IN,
   },
 
   argon2: {
-    memoryCost: parseInt(process.env.ARGON2_MEMORY_COST, 10) || 65536,
-    timeCost: parseInt(process.env.ARGON2_TIME_COST, 10) || 3,
-    parallelism: parseInt(process.env.ARGON2_PARALLELISM, 10) || 4,
+    memoryCost: parseInt(process.env.ARGON2_MEMORY_COST, 10),
+    timeCost: parseInt(process.env.ARGON2_TIME_COST, 10),
+    parallelism: parseInt(process.env.ARGON2_PARALLELISM, 10),
   },
 
   blockchain: {
@@ -49,10 +43,6 @@ const config = {
   },
 };
 
-/**
- * Fail-loud validation. Called once from bootstrap so that one-off scripts
- * like `db:init` can still load config without requiring a JWT secret.
- */
 function validate() {
   const errors = [];
 
@@ -64,9 +54,6 @@ function validate() {
     errors.push('ALLOWED_ORIGIN must be set in production');
   }
 
-  // Argon2id parameter floors. OWASP's 2023 minimum recommendation for
-  // Argon2id is m=19 MiB, t=2, p=1 — anything below that and a
-  // misconfigured deployment ships near-instant password hashing.
   if (config.argon2.memoryCost < 19456) {
     errors.push(
       `ARGON2_MEMORY_COST=${config.argon2.memoryCost} KiB is below the OWASP minimum of 19456 (19 MiB)`

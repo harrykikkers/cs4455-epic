@@ -1,9 +1,9 @@
 const mysql = require('mysql2/promise');
-const config = require('./index');
+const config = require('.');
 const logger = require('../utils/logger').child({ component: 'db' });
 
 /**
- * Singleton pattern — one connection pool for the entire process.
+ * Singleton — one connection pool for the entire process.
  * mysql2 pool already manages multiple connections internally;
  * wrapping it in a singleton prevents accidental duplicate pools.
  */
@@ -20,7 +20,6 @@ function getPool() {
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
-      // Always use parameterised queries — never interpolate user input
       namedPlaceholders: true,
     });
 

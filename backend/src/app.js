@@ -21,7 +21,6 @@ const KeyService = require('./services/KeyService');
 const PasswordHasher = require('./services/PasswordHasher');
 
 async function bootstrap() {
-  // Fail fast on missing secrets before anything else happens.
   config.validate();
 
   const app = express();
@@ -31,13 +30,13 @@ async function bootstrap() {
   // Without this the auth limiter becomes a global counter behind a proxy.
   app.set('trust proxy', 1);
 
-  // ── Request correlation ───────────────────────────────────────
+  // Request correlation 
   // Stamp every request with a UUID before any other middleware runs so
   // that rate-limit denials, validation errors, and unhandled exceptions
   // all carry the same correlation ID — essential for the pentest report.
   app.use(requestId);
 
-  // ── Security middleware ───────────────────────────────────────
+  // Security Middleware
   // Helmet sets secure HTTP headers (X-Content-Type-Options,
   // X-Frame-Options, Strict-Transport-Security, etc.)
   app.use(helmet());
@@ -49,13 +48,7 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   }));
 
-  // ── Rate limiting ─────────────────────────────────────────────
-  // Brute-force resilience on auth endpoints. The express-rate-limit
-  // middleware tracks per-IP (req.ip is correct because of `trust proxy 1`).
-  //
-  // Register has its own stricter limit because the endpoint inherently
-  // confirms username existence (409 vs 201) — a UX necessity, but it
-  // means low rate limits are the primary defence against enumeration.
+  // Rate limiting 
   const registerLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
     max: 5,
@@ -84,17 +77,12 @@ async function bootstrap() {
   });
   app.use('/api', generalLimiter);
 
-  // Body parsing. 256 KB is generous for an AEAD ciphertext + nonce + metadata
-  // and starves attackers trying to wedge the JSON parser with megabytes of
-  // input. nginx's client_max_body_size is set to the same value at the edge
+
+  // nginx's client_max_body_size is set to the same value at the edge
   // so oversized bodies are dropped before they reach Node.
   app.use(express.json({ limit: '256kb' }));
 
-  // ── Dependency wiring ────────────────────────────────────────
-  // Build repositories on the shared pool, then assemble services on top.
-  // BlockchainService is constructed eagerly so its Sepolia provider is
-  // ready before the first POST /api/messages fires. MessageService takes
-  // it as a direct collaborator — no event bus indirection.
+  // Dependency wiring 
   const pool = getPool();
   const userRepo = new UserRepository(pool);
   const messageRepo = new MessageRepository(pool);
@@ -107,24 +95,19 @@ async function bootstrap() {
     keyService: new KeyService(keyRepo),
   };
 
-  // ── Routes ───────────────────────────────────────────────────
+  // Routes
   mountRoutes(app, services);
 
-  // ── Global error handler (must be last) ──────────────────────
+  // Global error handler
   app.use(errorHandler);
 
-  // ── Start server ─────────────────────────────────────────────
-  // Bind loopback-only in production. The public entry point is nginx on
-  // :443, which proxies to 127.0.0.1:3000. Binding to loopback means Node
-  // physically cannot accept off-host connections even if the firewall
-  // misconfigures — defence in depth for the "compromised infrastructure"
-  // posture. In development, bind to all interfaces for easier testing.
+  // Start server
   const bindHost = config.env === 'production' ? '127.0.0.1' : '0.0.0.0';
   const server = app.listen(config.port, bindHost, () => {
     logger.info(`Server running on ${bindHost}:${config.port} [${config.env}]`);
   });
 
-  // ── Graceful shutdown — drain connections then close the pool ─
+  // Graceful shutdown
   const shutdown = (signal) => {
     logger.info(`${signal} received — shutting down`);
     server.close(async (closeErr) => {
