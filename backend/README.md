@@ -37,7 +37,6 @@ backend/
 │   │   ├── auth.js             # JWT verification
 │   │   ├── errorHandler.js     # Global error handler
 │   │   └── validate.js         # Input validation rules (express-validator)
-│   ├── models/                 # (reserved for domain models / DTOs if needed)
 │   ├── repositories/           # Data access layer — raw SQL, no business logic
 │   │   ├── UserRepository.js
 │   │   ├── MessageRepository.js
@@ -66,7 +65,6 @@ backend/
 ├── scripts/
 │   └── init-db.js              # Creates database tables
 ├── tests/                      # Jest test files
-├── docs/                       # Design documents, crypto doc, pentest report
 ├── .env.example                # Environment variable template
 ├── .gitignore
 ├── package.json
