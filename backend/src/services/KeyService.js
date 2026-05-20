@@ -1,13 +1,20 @@
-
 /**
- * KeyService — manages public key storage and retrieval.
+ * KeyService — manages public key storage and retrieval under TOFU.
  *
- * Implements Trust On First Use (TOFU): the first public key a user
- * uploads is pinned. If they later try to upload a different key,
- * the service flags a key change warning so clients can alert users
- * (similar to SSH known_hosts).
+ * Pin-on-first-use: the first key a user publishes for a given key_type is
+ * accepted unconditionally. Subsequent publishes are classified:
+ *
+ *   - unchanged → idempotent re-publish, no-op
+ *   - rotation_required → the new key differs from the pinned one; reject
+ *     unless the caller explicitly sets acknowledgeRotation=true. This
+ *     models the SSH known_hosts warning: a key change is a security event
+ *     the user must consent to, not something the server quietly accepts.
+ *
+ * On accepted rotation, the old key is archived to public_key_history so a
+ * compromised server cannot substitute a user's key without leaving an
+ * auditable trail.
  */
-const { NotFoundError } = require('../utils/errors');
+const { ConflictError, NotFoundError } = require('../utils/errors');
 const logger = require('../utils/logger');
 
 class KeyService {
@@ -15,13 +22,37 @@ class KeyService {
     this._keyRepo = keyRepository;
   }
 
-  async publishKey({ userId, publicKey, keyType }) {
-    if (!['x25519', 'ed25519'].includes(keyType)) {
-      throw new Error('keyType must be x25519 or ed25519');
+  async publishKey({ userId, publicKey, keyType, acknowledgeRotation = false }) {
+    const current = await this._keyRepo.findCurrent(userId, keyType);
+
+    if (!current) {
+      const { version } = await this._keyRepo.insertFirst({ userId, publicKey, keyType });
+      logger.info(`Public key (${keyType}) pinned for user ${userId} v${version}`);
+      return { status: 'pinned', version };
     }
 
-    await this._keyRepo.storePublicKey({ userId, publicKey, keyType });
-    logger.info(`Public key (${keyType}) published for user ${userId}`);
+    if (current.public_key === publicKey) {
+      // Idempotent re-publish — client is just confirming the pin.
+      return { status: 'unchanged', version: current.version };
+    }
+
+    if (!acknowledgeRotation) {
+      // Refuse to overwrite. The client must re-submit with
+      // acknowledgeRotation: true after the user confirms the change.
+      throw new ConflictError(
+        'A different public key is already pinned for this user and key type. ' +
+        'Re-publish with acknowledgeRotation=true to rotate.'
+      );
+    }
+
+    const { version } = await this._keyRepo.rotate({
+      userId,
+      keyType,
+      current,
+      newPublicKey: publicKey,
+    });
+    logger.warn(`Public key (${keyType}) ROTATED for user ${userId} v${version}`);
+    return { status: 'rotated', version, previousVersion: current.version };
   }
 
   async getPublicKeys(userId) {
@@ -42,6 +73,10 @@ class KeyService {
 
   async listPublicKeys() {
     return this._keyRepo.getAllPublicKeys();
+  }
+
+  async getKeyHistory(userId, keyType) {
+    return this._keyRepo.getHistory(userId, keyType);
   }
 }
 

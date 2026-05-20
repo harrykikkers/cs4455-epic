@@ -62,8 +62,14 @@ async function bootstrap() {
   app.use(errorHandler);
 
   // ── Start server ─────────────────────────────────────────────
-  const server = app.listen(config.port, () => {
-    logger.info(`Server running on port ${config.port} [${config.env}]`);
+  // Bind loopback-only in production. The public entry point is nginx on
+  // :443, which proxies to 127.0.0.1:3000. Binding to loopback means Node
+  // physically cannot accept off-host connections even if the firewall
+  // misconfigures — defence in depth for the "compromised infrastructure"
+  // posture. In development, bind to all interfaces for easier testing.
+  const bindHost = config.env === 'production' ? '127.0.0.1' : '0.0.0.0';
+  const server = app.listen(config.port, bindHost, () => {
+    logger.info(`Server running on ${bindHost}:${config.port} [${config.env}]`);
   });
 
   // ── Graceful shutdown — drain connections then close the pool ─

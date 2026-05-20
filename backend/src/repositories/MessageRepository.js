@@ -1,3 +1,5 @@
+const { ConflictError } = require('../utils/errors');
+
 class MessageRepository {
   constructor(pool) {
     this._pool = pool;
@@ -9,7 +11,18 @@ class MessageRepository {
         (message_id, sender_id, recipient_id, ciphertext, nonce, created_at)
       VALUES (?, ?, ?, ?, ?, NOW())
     `;
-    await this._pool.execute(sql, [messageId, senderId, recipientId, ciphertext, nonce]);
+    try {
+      await this._pool.execute(sql, [messageId, senderId, recipientId, ciphertext, nonce]);
+    } catch (err) {
+      // Unique (recipient_id, nonce) — an active attacker replaying a
+      // captured ciphertext+nonce hits this. AEAD already prevents the
+      // recipient from decrypting a replay, but rejecting at the server
+      // also keeps the inbox clean and gives a defensible audit signal.
+      if (err.code === 'ER_DUP_ENTRY') {
+        throw new ConflictError('Duplicate nonce for this recipient — possible replay');
+      }
+      throw err;
+    }
   }
 
   async findById(messageId) {
@@ -84,7 +97,14 @@ class MessageRepository {
         (id, message_id, shared_by_id, shared_with_id, ciphertext, nonce, created_at)
       VALUES (?, ?, ?, ?, ?, ?, NOW())
     `;
-    await this._pool.execute(sql, [id, messageId, sharedById, sharedWithId, ciphertext, nonce]);
+    try {
+      await this._pool.execute(sql, [id, messageId, sharedById, sharedWithId, ciphertext, nonce]);
+    } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') {
+        throw new ConflictError('Duplicate nonce for this share recipient — possible replay');
+      }
+      throw err;
+    }
   }
 
   async revokeShare(messageId, sharedWithId) {

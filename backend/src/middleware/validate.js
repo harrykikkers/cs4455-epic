@@ -66,10 +66,23 @@ const validate = {
   ],
 
   publishKey: [
-    body('publicKey').notEmpty().withMessage('Public key required'),
+    // x25519 and ed25519 public keys are 32 raw bytes. Accept either
+    // base64 (44 chars, padded), base64url (43 chars, unpadded), or
+    // hex (64 chars). The exact length depends on encoding, but anything
+    // outside the 43–88 char window can't possibly be a valid 32-byte key.
+    body('publicKey')
+      .isString().withMessage('publicKey must be a string')
+      .isLength({ min: 43, max: 88 })
+      .withMessage('publicKey length is not consistent with a 32-byte key')
+      .matches(/^[A-Za-z0-9+/=_-]+$/)
+      .withMessage('publicKey must be base64, base64url, or hex'),
     body('keyType')
       .isIn(['x25519', 'ed25519'])
       .withMessage('keyType must be x25519 or ed25519'),
+    body('acknowledgeRotation')
+      .optional()
+      .isBoolean().withMessage('acknowledgeRotation must be a boolean')
+      .toBoolean(),
     handleValidation,
   ],
 
