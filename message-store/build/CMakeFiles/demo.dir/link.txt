@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/demo.dir/demo.cpp.o CMakeFiles/demo.dir/MessageStore.cpp.o -o demo 
