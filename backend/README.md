@@ -45,7 +45,8 @@ backend/
 │   ├── repositories/           # Data access layer — parameterised SQL, no business logic
 │   │   ├── UserRepository.js
 │   │   ├── MessageRepository.js
-│   │   └── KeyRepository.js
+│   │   ├── KeyRepository.js
+│   │   └── LoginAttemptRepository.js
 │   ├── routes/                 # Route definitions — maps URLs to controller methods
 │   │   ├── index.js            # Mounts all route groups
 │   │   ├── auth.js
@@ -108,18 +109,20 @@ npm start
 |--------|------|------|-------------|
 | POST | `/api/auth/register` | No | Create account |
 | POST | `/api/auth/login` | No | Get JWT token |
+| PUT | `/api/auth/password` | Yes | Change password — body: `{ currentPassword, newPassword }` |
 | GET | `/api/auth/me` | Yes | Current user info |
-| POST | `/api/messages` | Yes | Send encrypted message — body must include `{ recipientId, ciphertext, nonce, digest }` where `digest` is the client-computed keccak256 of plaintext (0x + 64 hex) |
+| POST | `/api/messages` | Yes | Send encrypted message — body: `{ recipientId, enc, ciphertext, nonce, signature, seqNo, digest }` where `enc` is the HPKE encapsulated key, `signature` is the Ed25519 signature over the payload, `seqNo` is the per-recipient sequence number, and `digest` is the client-computed keccak256 of plaintext (0x + 64 hex) |
 | GET | `/api/messages/inbox` | Yes | List received messages |
 | GET | `/api/messages/sent` | Yes | List sent messages |
 | GET | `/api/messages/:id` | Yes | Get single message |
 | GET | `/api/messages/:id/chain` | Yes | Chain proof: `{ digestHash, chainStatus, txHash, recordedAt }` — feed `txHash` into the standalone verification page |
-| POST | `/api/messages/:id/forward` | Yes | Forward to another user |
+| POST | `/api/messages/:id/forward` | Yes | Forward to another user — body: `{ recipientId, enc, ciphertext, nonce }` (re-encrypted under the new recipient's key) |
 | POST | `/api/messages/:id/revoke` | Yes | Revoke shared access |
 | DELETE | `/api/messages/:id` | Yes | Soft-delete message |
-| POST | `/api/keys` | Yes | Publish public key |
+| POST | `/api/keys` | Yes | Publish public key — body: `{ publicKey, keyType, acknowledgeRotation? }` |
 | GET | `/api/keys` | Yes | List all public keys |
 | GET | `/api/keys/:userId` | Yes | Get user's public key |
+| GET | `/api/keys/:userId/history/:keyType` | Yes | Append-only key rotation history — clients reconcile pinned keys against this to detect server-side substitution |
 | GET | `/api/health` | No | Health check |
 
 ### Blockchain integration
@@ -149,7 +152,9 @@ erDiagram
   users ||--o{ messages : sends
   users ||--o{ messages : receives
   users ||--o{ public_keys : has
+  users ||--o{ public_key_history : "rotated through"
   users ||--o{ message_shares : shares
+  users ||--o{ login_attempts : "tracked for"
   messages ||--o{ message_shares : forwarded
   messages ||--|| blockchain_records : recorded
 
@@ -157,7 +162,16 @@ erDiagram
     UUID user_id PK
     VARCHAR username UK
     VARCHAR password_hash
+    DATETIME password_changed_at
     DATETIME created_at
+  }
+
+  login_attempts {
+    UUID id PK
+    UUID user_id FK
+    VARCHAR ip_address
+    DATETIME attempted_at
+    BOOLEAN success
   }
 
   public_keys {
@@ -165,7 +179,18 @@ erDiagram
     UUID user_id FK
     TEXT public_key
     ENUM key_type
+    INT version
     DATETIME created_at
+    DATETIME rotated_at
+  }
+
+  public_key_history {
+    UUID id PK
+    UUID user_id FK
+    TEXT public_key
+    ENUM key_type
+    INT version
+    DATETIME pinned_at
     DATETIME rotated_at
   }
 
@@ -173,8 +198,13 @@ erDiagram
     UUID message_id PK
     UUID sender_id FK
     UUID recipient_id FK
+    VARCHAR enc
     TEXT ciphertext
-    VARCHAR nonce
+    CHAR nonce
+    TEXT signature
+    BIGINT seq_no
+    CHAR digest_hash
+    ENUM chain_status
     DATETIME created_at
     DATETIME deleted_at
   }
@@ -184,8 +214,9 @@ erDiagram
     UUID message_id FK
     UUID shared_by_id FK
     UUID shared_with_id FK
+    VARCHAR enc
     TEXT ciphertext
-    VARCHAR nonce
+    CHAR nonce
     DATETIME created_at
     DATETIME revoked_at
   }

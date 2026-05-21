@@ -69,8 +69,9 @@ sudo certbot renew --dry-run
 ## 4. Make sure Node is running on loopback
 
 The nginx config proxies to `127.0.0.1:3000`. Confirm the Node app is bound
-there (it is by default — `app.listen(config.port)` without a host binds to
-all interfaces, but firewall rules below close port 3000 off externally).
+there — in production it binds explicitly to `127.0.0.1` (see
+`backend/src/app.js`), so port 3000 is never exposed on a public interface.
+The firewall rules below are belt-and-braces on top of that.
 
 ```bash
 sudo ss -tlnp | grep 3000   # should show node listening
