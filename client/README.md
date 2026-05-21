@@ -1,9 +1,10 @@
 # Secure Messenger — Python Client
 
-Python client for the CS4455 Epic Project secure messaging application.
-Talks to the [backend server](../backend/README.md) over HTTPS, performs
-all encryption locally, and computes the keccak256 digest that the server
-records on Sepolia. The server never sees plaintext.
+Python desktop client for the CS4455 Epic Project secure messaging application.
+Runs locally on the user's machine as a GUI application, performs all
+encryption locally, and communicates with the
+[backend server](../backend/README.md) over HTTPS. The server never sees
+plaintext.
 
 ## Status
 
@@ -15,17 +16,25 @@ called out below.
 ## Tech Stack
 
 - **Runtime**: Python 3.11+
+- **GUI**: [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) —
+  modern-looking desktop UI built on top of Tkinter (ships with Python, no
+  external system dependencies). See [UI layer](#ui-layer).
 - **HTTP**: `requests` (sync) — see *Concurrency model* below
-- **Crypto**: *TBD* — must implement HPKE (encryption), Ed25519 (signatures),
-  and keccak256 (digest). See [Crypto layer](#crypto-layer).
-- **GUI**: *TBD* — see [UI layer](#ui-layer).
+- **Crypto**:
+  - `pyhpke` — HPKE Mode_Base (`DHKEM(X25519, HKDF-SHA256)`) for key
+    encapsulation and forward secrecy
+  - `cryptography` — Ed25519 signing/verification, AES-256-GCM
+    authenticated encryption, HKDF-SHA256 key derivation
+  - `argon2-cffi` — Argon2id password hashing (local KEK derivation for
+    encrypting private keys at rest)
+  - `pycryptodome` — keccak256 digest computation (blockchain anchoring)
 - **Config**: `python-dotenv` for `.env` loading
 - **Testing**: `pytest` + `responses` (mock HTTP)
 
 ## Client Flow
 
 ```
-UI (GUI / CLI)
+UI (CustomTkinter desktop app)
     ↓
 Session (login state, JWT, current user)
     ↓
@@ -55,7 +64,7 @@ client/
 ├── src/
 │   └── secure_messenger_client/
 │       ├── __init__.py
-│       ├── __main__.py           # Entry point — launches UI
+│       ├── __main__.py           # Entry point — launches GUI
 │       ├── config.py             # Env config (server URL, keystore path)
 │       ├── api/                  # HTTP client — one module per route group
 │       │   ├── __init__.py
@@ -63,27 +72,35 @@ client/
 │       │   ├── auth.py           # /api/auth/* wrappers
 │       │   ├── messages.py       # /api/messages/* wrappers
 │       │   └── keys.py           # /api/keys/* wrappers
-│       ├── crypto/               # TBD — see "Crypto layer" below
+│       ├── crypto/               # Local cryptography — all E2EE happens here
 │       │   ├── __init__.py
-│       │   ├── hpke.py           # HPKE seal / open (recipient pubkey ↔ enc, ciphertext, nonce)
-│       │   ├── signing.py        # Ed25519 sign / verify
-│       │   ├── digest.py         # keccak256(plaintext) → 32-byte hex
-│       │   └── keystore.py       # Local private key + pinned peer key storage
+│       │   ├── hpke.py           # HPKE Mode_Base seal / open (pyhpke)
+│       │   ├── signing.py        # Ed25519 sign / verify (cryptography)
+│       │   ├── aead.py           # AES-256-GCM encrypt / decrypt (cryptography)
+│       │   ├── kdf.py            # HKDF-SHA256 key derivation + domain separation (cryptography)
+│       │   ├── digest.py         # keccak256(plaintext) → 0x-prefixed hex (pycryptodome)
+│       │   └── keystore.py       # Local private key storage + KEK + pinned peer keys
 │       ├── services/             # Business logic
 │       │   ├── __init__.py
 │       │   ├── auth_service.py   # register, login, password change
 │       │   ├── message_service.py# send / receive / forward / revoke / delete
 │       │   ├── key_service.py    # publish own key, fetch + pin peer keys, reconcile history
 │       │   └── chain_service.py  # fetch chain proof for a message
-│       ├── models/               # Typed DTOs (dataclasses or pydantic)
+│       ├── models/               # Typed DTOs (dataclasses)
 │       │   ├── __init__.py
 │       │   ├── user.py
 │       │   ├── message.py
 │       │   └── key.py
 │       ├── session.py            # In-memory session state (JWT, current user)
 │       ├── errors.py             # Custom exception hierarchy
-│       └── ui/                   # TBD — see "UI layer" below
-│           └── __init__.py
+│       └── ui/                   # CustomTkinter GUI
+│           ├── __init__.py
+│           ├── app.py            # Main application window + frame manager
+│           ├── login_frame.py    # Login / register screen
+│           ├── inbox_frame.py    # Message list (inbox + sent tabs)
+│           ├── compose_frame.py  # Compose new message
+│           ├── message_frame.py  # Single message view (forward, revoke, delete, download)
+│           └── widgets.py        # Shared UI components (status bar, key warning banner)
 ├── tests/                        # pytest tests, mocked HTTP
 ├── .env.example                  # SERVER_URL, KEYSTORE_PATH, etc.
 ├── .gitignore
@@ -104,7 +121,8 @@ client/
 ```bash
 # From the client/ directory
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate      # macOS / Linux
+# .venv\Scripts\activate       # Windows
 
 # Install in editable mode so `import secure_messenger_client` works while you develop
 pip install -e .
@@ -122,7 +140,7 @@ python -m secure_messenger_client
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `SERVER_URL` | `http://localhost:3000` | Backend base URL |
-| `KEYSTORE_PATH` | `~/.secure_messenger/keystore.json` | Where private keys are stored |
+| `KEYSTORE_PATH` | `~/.secure_messenger/keystore.json` | Where private keys are stored (encrypted) |
 | `REQUEST_TIMEOUT` | `10` | HTTP timeout in seconds |
 | `LOG_LEVEL` | `INFO` | Python logging level |
 
@@ -167,60 +185,221 @@ The base HTTP client maps server status codes to exceptions:
 | 5xx | `ServerError` | Backend failure |
 
 Network failures (timeout, DNS, refused connection) raise `NetworkError`.
-The UI layer should catch the base `ClientError` and show a friendly
-message.
+The UI layer catches the base `ClientError` and shows a user-friendly
+message in the status bar.
 
-## Crypto layer
+### TLS Certificate Verification
 
-> **Not implemented yet.** This section is the contract the crypto layer
-> must satisfy once libraries are chosen.
+The backend server uses a certificate issued by **Let's Encrypt**. The
+`requests` library verifies the server's TLS certificate by default
+using the system CA bundle (via `certifi`). The client enforces:
 
-The server expects these fields for `POST /api/messages`:
+- Certificate chain validation against trusted CAs — self-signed
+  certificates are rejected
+- Hostname verification — the certificate's Subject Alternative Name
+  must match the server URL
+- Expiry checks — expired certificates are rejected
+- `config.py` refuses non-`https://` values for `SERVER_URL` when the
+  host is not `localhost` or `127.0.0.1`
 
-| Field | Type | Built by |
-|-------|------|---------|
-| `enc` | hex string | HPKE encapsulation under recipient's public key |
-| `ciphertext` | hex string | HPKE seal output over the plaintext |
-| `nonce` | hex string (12 bytes) | HPKE-derived |
-| `signature` | hex string | Ed25519 signature over `(ciphertext ‖ nonce ‖ seq_no ‖ recipient_id)` using the sender's signing key |
-| `seq_no` | integer | Monotonically increasing per (sender, recipient) — stored locally |
-| `digest` | hex string (`0x` + 64 hex) | `keccak256(plaintext)` — must be computed *before* encryption |
+TLS verification is never disabled in production. During local
+development, `http://localhost` is permitted.
 
-The crypto layer must:
+### Input Validation (client-side)
 
-1. Generate two key pairs per user — one HPKE (encryption) and one
-   Ed25519 (signing). Both get published via `POST /api/keys` with
-   distinct `key_type` values.
-2. Store private keys in the local keystore (encrypted with the user's
-   password? — design decision pending).
-3. **Pin** peer public keys on first use. On each subsequent send/receive,
-   reconcile the pinned key against
-   `GET /api/keys/:user_id/history/:key_type`. If the server returns a key
-   not present in the history, that's evidence of server-side substitution
-   — surface it to the UI.
-4. For receive: open the HPKE envelope, verify the Ed25519 signature, and
-   only then surface the plaintext.
+The client sanitises all user input before it reaches the API client or
+crypto layer. Validation runs in the service layer so both the UI and
+any future CLI can share the same checks:
 
-Library choice is open — likely candidates are `pyhpke` for HPKE,
-`cryptography` for Ed25519, and `eth-hash` or `pycryptodome` for keccak256.
-None are wired up yet.
+- **Usernames** — alphanumeric plus hyphens/underscores, length-bounded,
+  stripped of leading/trailing whitespace
+- **Passwords** — minimum length enforced, no maximum (hashed
+  immediately), reject null bytes
+- **Message body** — reject empty input, enforce a maximum plaintext
+  length before encryption, strip control characters
+- **Recipient selection** — must resolve to a valid user ID from the key
+  directory; the compose screen only offers known users
+- **Sequence numbers** — validated as positive integers; the service
+  layer manages the counter, the UI never sets it directly
+- **Hex-encoded crypto fields** — length and format checks before POSTing
+  (e.g. `enc`, `ciphertext`, `nonce`, `signature` must be valid hex of
+  expected byte lengths)
 
-## UI layer
+Server-side validation is the last line of defence — the client does not
+rely on it.
 
-> **Not implemented yet.** Framework choice deferred.
+## Crypto Layer
 
-The UI should depend only on the `services/` layer — never on `api/` or
-`crypto/` directly — so that it can be swapped out (CLI for tests, GUI for
-demos) without touching business logic.
+All encryption and decryption runs locally in the Python process on the
+user's machine. The server never sees plaintext, private keys, or shared
+secrets.
 
-## Concurrency model
+### Libraries
 
-HTTP calls are synchronous (`requests`). When a UI is added, network calls
-must run on a background thread so the UI stays responsive — the exact
-mechanism depends on the GUI framework chosen. Until then, the API and
-service layers are safe to call directly from `__main__.py` or tests.
+| Library | Purpose | Why |
+|---------|---------|-----|
+| `pyhpke` | HPKE Mode_Base — `DHKEM(X25519, HKDF-SHA256)` | RFC 9180 compliant; provides key encapsulation with ephemeral keys for forward secrecy |
+| `cryptography` | Ed25519 signing/verification, AES-256-GCM, HKDF-SHA256 | Vetted, well-maintained; covers AEAD, KDF, and signing in one library |
+| `argon2-cffi` | Argon2id password hashing | Memory-hard KDF for deriving the local key-encryption key (KEK) from the user's password |
+| `pycryptodome` | keccak256 digest | Computes the message digest that the server records on Sepolia |
 
-## Blockchain verification
+### Cryptographic Protocol — Alice sends a message to Bob
+
+**Step 1 — Unlock keys.**
+Alice logs in. Her password derives the local KEK via HKDF, decrypting
+her stored private keys. The local KEK is derived with a different salt
+and info string than the server auth token. The password is never sent
+to the server in plaintext.
+
+**Step 2 — Fetch Bob's public keys.**
+Alice requests Bob's X25519 and Ed25519 public keys from the server's
+key directory. On first contact she pins them (Trust On First Use). An
+attacker present at first contact can permanently pin their own key —
+this is a known TOFU limitation stated in the design document.
+
+**Step 3 — Generate ephemeral X25519 keypair.**
+Alice generates a fresh X25519 keypair for this message only. This is
+the foundation for forward secrecy — the private key will exist only
+long enough to derive the shared secret. The ephemeral keypair is
+generated using a CSPRNG (`os.urandom`), never any non-cryptographically
+secure source.
+
+**Step 4 — HPKE Mode_Base encapsulate.**
+Alice runs HPKE encapsulation using her ephemeral secret key and Bob's
+static X25519 public key. This produces a shared secret that only Bob
+can recover. Mode_Base means no sender authentication at the HPKE
+level — that is handled separately by Ed25519. The DH computation is
+`shared_secret = X25519(eph_sk, bob_x25519_pk)`. Bob will compute the
+same value as `X25519(bob_x25519_sk, eph_pk)`.
+
+**Step 5 — HKDF derive message key + nonce.**
+Alice uses HKDF to derive the AES-256-GCM encryption key from the
+shared secret, with domain-separated info strings. The nonce is random,
+not counter-based, because each key is used exactly once — making
+collision probability negligible.
+
+**Step 6 — AES-256-GCM encrypt with replay-protected AAD.**
+Alice encrypts the plaintext client-side (never server-side). The AAD
+includes a monotonic sequence number per recipient, binding message
+ordering into the GCM authentication tag. The sequence number is per
+(sender, recipient) and strictly increasing. Alice stores her current
+counter for each recipient locally.
+
+**Step 7 — Ed25519 sign payload.**
+Alice signs the entire outgoing payload with her long-term Ed25519
+signing key, proving to Bob that she authored this message. The
+signature covers the sequence number — an attacker cannot forge a valid
+signature with a different sequence number. The signature and GCM tag
+both independently protect message ordering.
+
+**Step 8 — Erase ephemeral private key.**
+Alice securely erases the ephemeral X25519 private key and all derived
+secrets from memory. After this, nobody can decrypt this message from
+the wire payload. Forward secrecy is achieved at this step.
+
+**Step 9 — Transmit and store.**
+Alice sends the assembled payload over TLS to the server. The server
+stores it as an opaque blob and records its keccak256 hash on-chain.
+The server only ever sees ciphertext and metadata.
+
+**Step 10 — Verify, check replay, decrypt (Bob's side).**
+Bob performs five checks in sequence: (1) signature verification
+(authenticity), (2) replay detection via sequence number against his
+local counter (ordering), (3) HPKE decapsulation to recover the shared
+secret, (4) HKDF expansion to derive the message key, and
+(5) AES-256-GCM decryption (confidentiality and integrity). Only after
+all five pass is the plaintext surfaced to the UI.
+
+### Key Storage at Rest
+
+Private keys (X25519 decapsulation key + Ed25519 signing key) are stored
+in `KEYSTORE_PATH` as a JSON file, encrypted under a key-encryption key
+(KEK) derived from the user's password:
+
+```
+KEK = HKDF-Expand(
+    prk  = Argon2id(password, salt),
+    info = "local-key-encrypt-v1",
+    len  = 32
+)
+```
+
+The Argon2id parameters and salt are stored alongside the encrypted keys
+in the keystore file. These parameters are **separate** from the
+server-side password hash — the server never sees the KEK or the salt
+used to derive it.
+
+### TOFU Key Pinning
+
+On first contact with a peer, their public keys (X25519 + Ed25519) are
+pinned locally. On each subsequent interaction:
+
+1. Fetch the peer's current key from the server
+2. Compare against the pinned key
+3. If changed — fetch key history from
+   `GET /api/keys/:user_id/history/:key_type`
+4. If the new key is in the history (legitimate rotation) — prompt the
+   user to accept and update the pin
+5. If the new key is **not** in the history — display a warning banner
+   (possible server-side key substitution attack)
+
+## UI Layer
+
+The GUI is built with [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter),
+a modern-themed wrapper around Python's built-in Tkinter. It provides a
+native desktop window without requiring any system-level dependencies
+beyond Python itself — no Electron, no browser, no web server.
+
+The application runs as a single Python process on the user's machine.
+All cryptography executes in-process, so plaintext never leaves the
+application boundary.
+
+### Screens
+
+| Screen | Purpose |
+|--------|---------|
+| Login / Register | Username + password entry; register creates account and generates keypairs |
+| Inbox | List of received messages with sender, timestamp, and chain status |
+| Sent | List of sent messages |
+| Compose | Recipient picker (from key directory), plaintext input, send button |
+| Message detail | Decrypted plaintext, metadata, forward / revoke / delete / download actions |
+| Key warning | Banner shown when a peer's public key changes unexpectedly |
+
+### Message Download (C++ message store)
+
+When a user downloads a message, the Python client decrypts it locally
+and hands the plaintext to the **C++ local message store** — a separate
+component that manages an encrypted on-disk archive of downloaded
+messages. The flow is:
+
+1. User selects a message (owned or shared) and clicks **Download**
+2. Python client fetches the ciphertext from the server, decrypts it
+   locally, and writes the plaintext to a temporary file
+3. The C++ message store binary is invoked to import, index, and
+   encrypt the message into its local store
+4. The temporary plaintext file is securely erased
+
+The C++ component is documented separately in
+[`cpp-message-store/`](../cpp-message-store/). It handles persistent
+local storage, search, and export — the Python client only handles
+decryption and handoff.
+
+### Threading
+
+CustomTkinter runs on the main thread. All network calls (API requests)
+and crypto operations run on background threads via `threading.Thread` to
+keep the UI responsive. Results are posted back to the main thread using
+Tkinter's `after()` method. The UI shows a loading indicator during
+network calls.
+
+## Concurrency Model
+
+HTTP calls are synchronous (`requests`). The GUI dispatches network and
+crypto work to background threads so the main thread stays responsive.
+The service layer is thread-safe — each call is independent and does not
+share mutable state beyond the `Session` (which is protected by a lock).
+
+## Blockchain Verification
 
 The client does **not** read from Sepolia directly. To verify a message
 is anchored on-chain:
@@ -234,7 +413,7 @@ is anchored on-chain:
 
 The verification page is intentionally separate from this client — per
 the assignment brief, anyone (not just the sender/recipient) can verify
-a message given the plaintext and tx hash.
+a message given the plaintext and transaction hash.
 
 ## Security Notes (client-side responsibilities)
 
@@ -251,3 +430,7 @@ a message given the plaintext and tx hash.
   Use a logging filter to scrub these.
 - **Validate `SERVER_URL` uses HTTPS in production** — config layer should
   refuse `http://` for non-localhost hosts.
+- **Erase sensitive memory** — ephemeral keys and derived secrets must be
+  overwritten after use. Python's garbage collector does not guarantee
+  immediate erasure, so use `ctypes.memset` or `bytearray` zeroing
+  where possible.
