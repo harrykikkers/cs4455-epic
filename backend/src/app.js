@@ -13,6 +13,7 @@ const logger = require('./utils/logger').child({ component: 'app' });
 const UserRepository = require('./repositories/UserRepository');
 const MessageRepository = require('./repositories/MessageRepository');
 const KeyRepository = require('./repositories/KeyRepository');
+const LoginAttemptRepository = require('./repositories/LoginAttemptRepository');
 
 const AuthService = require('./services/AuthService');
 const MessageService = require('./services/MessageService');
@@ -86,10 +87,11 @@ async function bootstrap() {
   const userRepo = new UserRepository(pool);
   const messageRepo = new MessageRepository(pool);
   const keyRepo = new KeyRepository(pool);
+  const loginAttemptRepo = new LoginAttemptRepository(pool);
 
   const blockchainService = new BlockchainService(messageRepo);
   const services = {
-    authService: new AuthService(userRepo, new PasswordHasher()),
+    authService: new AuthService(userRepo, new PasswordHasher(), loginAttemptRepo),
     messageService: new MessageService(messageRepo, blockchainService),
     keyService: new KeyService(keyRepo),
   };
