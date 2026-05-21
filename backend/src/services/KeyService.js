@@ -24,39 +24,37 @@ class KeyService {
   }
 
   async publishKey({ userId, publicKey, keyType, acknowledgeRotation = false }) {
-    const current = await this._keyRepo.findCurrent(userId, keyType);
-
-    if (!current) {
-      const { version } = await this._keyRepo.insertFirst({ userId, publicKey, keyType });
-      logger.info(`Public key (${keyType}) pinned for user ${userId} v${version}`);
-      audit.info(`key.published userId=${userId} keyType=${keyType} version=${version} status=pinned`);
-      return { status: 'pinned', version };
-    }
-
-    if (current.public_key === publicKey) {
-      // Idempotent re-publish — client is just confirming the pin.
-      return { status: 'unchanged', version: current.version };
-    }
-
-    if (!acknowledgeRotation) {
-      audit.warn(`key.rotation.refused userId=${userId} keyType=${keyType} reason=no_acknowledgement`);
-      // Refuse to overwrite. The client must re-submit with
-      // acknowledgeRotation: true after the user confirms the change.
-      throw new ConflictError(
-        'A different public key is already pinned for this user and key type. ' +
-        'Re-publish with acknowledgeRotation=true to rotate.'
-      );
-    }
-
-    const { version } = await this._keyRepo.rotate({
+    const result = await this._keyRepo.publishKey({
       userId,
+      publicKey,
       keyType,
-      current,
-      newPublicKey: publicKey,
+      acknowledgeRotation,
     });
-    logger.warn(`Public key (${keyType}) ROTATED for user ${userId} v${version}`);
-    audit.warn(`key.rotated userId=${userId} keyType=${keyType} version=${version} previousVersion=${current.version}`);
-    return { status: 'rotated', version, previousVersion: current.version };
+
+    switch (result.status) {
+      case 'pinned':
+        logger.info(`Public key (${keyType}) pinned for user ${userId} v${result.version}`);
+        audit.info(`key.published userId=${userId} keyType=${keyType} version=${result.version} status=pinned`);
+        return { status: 'pinned', version: result.version };
+
+      case 'unchanged':
+        // Idempotent re-publish — client is just confirming the pin.
+        return { status: 'unchanged', version: result.version };
+
+      case 'rotation_required':
+        audit.warn(`key.rotation.refused userId=${userId} keyType=${keyType} reason=no_acknowledgement`);
+        // Refuse to overwrite. The client must re-submit with
+        // acknowledgeRotation: true after the user confirms the change.
+        throw new ConflictError(
+          'A different public key is already pinned for this user and key type. ' +
+          'Re-publish with acknowledgeRotation=true to rotate.'
+        );
+
+      case 'rotated':
+        logger.warn(`Public key (${keyType}) ROTATED for user ${userId} v${result.version}`);
+        audit.warn(`key.rotated userId=${userId} keyType=${keyType} version=${result.version} previousVersion=${result.previousVersion}`);
+        return { status: 'rotated', version: result.version, previousVersion: result.previousVersion };
+    }
   }
 
   async getPublicKeys(userId) {

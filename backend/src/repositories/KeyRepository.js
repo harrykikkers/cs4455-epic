@@ -18,36 +18,55 @@ class KeyRepository {
     this._pool = pool;
   }
 
-  async findCurrent(userId, keyType) {
-    const [rows] = await this._pool.execute(
-      `SELECT id, public_key, key_type, version, created_at, rotated_at
-       FROM public_keys
-       WHERE user_id = ? AND key_type = ?`,
-      [userId, keyType]
-    );
-    return rows[0] || null;
-  }
-
-  async insertFirst({ userId, publicKey, keyType }) {
-    const id = randomUUID();
-    await this._pool.execute(
-      `INSERT INTO public_keys (id, user_id, public_key, key_type, version)
-       VALUES (?, ?, ?, ?, 1)`,
-      [id, userId, publicKey, keyType]
-    );
-    return { id, version: 1 };
-  }
-
   /**
-   * Atomic rotation: archive the current row into public_key_history, then
-   * overwrite the live row with the new key and a bumped version. Both
-   * statements share a single connection in a transaction so a crash
-   * between them cannot leave history out of sync with the live key.
+   * Atomic publish: SELECT ... FOR UPDATE serialises concurrent publishes
+   * for the same (user_id, key_type), so two requests can't both observe
+   * "no current key" and double-insert, nor both observe the same current
+   * version and double-rotate (which would leave two history rows at the
+   * same version and corrupt the audit trail).
+   *
+   * Returns one of:
+   *   { status: 'pinned',            version }
+   *   { status: 'unchanged',         version }
+   *   { status: 'rotation_required', currentVersion }
+   *   { status: 'rotated',           version, previousVersion }
+   *
+   * The 'rotation_required' branch is data, not an error — the service
+   * decides whether to surface it as a 409, log it, etc.
    */
-  async rotate({ userId, keyType, current, newPublicKey }) {
+  async publishKey({ userId, publicKey, keyType, acknowledgeRotation }) {
     const conn = await this._pool.getConnection();
     try {
       await conn.beginTransaction();
+
+      const [rows] = await conn.execute(
+        `SELECT public_key, version, created_at
+         FROM public_keys
+         WHERE user_id = ? AND key_type = ?
+         FOR UPDATE`,
+        [userId, keyType]
+      );
+      const current = rows[0] || null;
+
+      if (!current) {
+        await conn.execute(
+          `INSERT INTO public_keys (id, user_id, public_key, key_type, version)
+           VALUES (?, ?, ?, ?, 1)`,
+          [randomUUID(), userId, publicKey, keyType]
+        );
+        await conn.commit();
+        return { status: 'pinned', version: 1 };
+      }
+
+      if (current.public_key === publicKey) {
+        await conn.commit();
+        return { status: 'unchanged', version: current.version };
+      }
+
+      if (!acknowledgeRotation) {
+        await conn.commit();
+        return { status: 'rotation_required', currentVersion: current.version };
+      }
 
       await conn.execute(
         `INSERT INTO public_key_history
@@ -61,11 +80,11 @@ class KeyRepository {
         `UPDATE public_keys
          SET public_key = ?, version = ?, rotated_at = NOW(), created_at = NOW()
          WHERE user_id = ? AND key_type = ?`,
-        [newPublicKey, newVersion, userId, keyType]
+        [publicKey, newVersion, userId, keyType]
       );
 
       await conn.commit();
-      return { version: newVersion };
+      return { status: 'rotated', version: newVersion, previousVersion: current.version };
     } catch (err) {
       await conn.rollback();
       throw err;
