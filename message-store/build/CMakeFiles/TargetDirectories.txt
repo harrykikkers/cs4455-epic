@@ -1,0 +1,3 @@
+/home/Epic-project/cs4455-epic/message-store/build/CMakeFiles/demo.dir
+/home/Epic-project/cs4455-epic/message-store/build/CMakeFiles/edit_cache.dir
+/home/Epic-project/cs4455-epic/message-store/build/CMakeFiles/rebuild_cache.dir
