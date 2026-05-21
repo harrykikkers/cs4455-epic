@@ -149,85 +149,86 @@ takes plaintext + a `txHash` from `GET /api/messages/:id/chain`, recomputes
 
 ```mermaid
 erDiagram
-  users ||--o{ messages : sends
-  users ||--o{ messages : receives
-  users ||--o{ public_keys : has
-  users ||--o{ public_key_history : "rotated through"
-  users ||--o{ message_shares : shares
-  users ||--o{ login_attempts : "tracked for"
-  messages ||--o{ message_shares : forwarded
-  messages ||--|| blockchain_records : recorded
+    users {
+        CHAR_36 user_id PK
+        VARCHAR_30 username UK
+        VARCHAR_255 password_hash
+        DATETIME password_changed_at
+        DATETIME created_at
+    }
 
-  users {
-    UUID user_id PK
-    VARCHAR username UK
-    VARCHAR password_hash
-    DATETIME password_changed_at
-    DATETIME created_at
-  }
+    login_attempts {
+        CHAR_36 id PK
+        CHAR_36 user_id FK
+        VARCHAR_45 ip_address
+        DATETIME attempted_at
+        BOOLEAN success
+    }
 
-  login_attempts {
-    UUID id PK
-    UUID user_id FK
-    VARCHAR ip_address
-    DATETIME attempted_at
-    BOOLEAN success
-  }
+    public_keys {
+        CHAR_36 id PK
+        CHAR_36 user_id FK
+        TEXT public_key
+        ENUM key_type "x25519 | ed25519"
+        INT version
+        DATETIME created_at
+        DATETIME rotated_at
+    }
 
-  public_keys {
-    UUID id PK
-    UUID user_id FK
-    TEXT public_key
-    ENUM key_type
-    INT version
-    DATETIME created_at
-    DATETIME rotated_at
-  }
+    public_key_history {
+        CHAR_36 id PK
+        CHAR_36 user_id FK
+        TEXT public_key
+        ENUM key_type "x25519 | ed25519"
+        INT version
+        DATETIME pinned_at
+        DATETIME rotated_at
+    }
 
-  public_key_history {
-    UUID id PK
-    UUID user_id FK
-    TEXT public_key
-    ENUM key_type
-    INT version
-    DATETIME pinned_at
-    DATETIME rotated_at
-  }
+    messages {
+        CHAR_36 message_id PK
+        CHAR_36 sender_id FK
+        CHAR_36 recipient_id FK
+        VARCHAR_64 enc
+        TEXT ciphertext
+        CHAR_16 nonce
+        TEXT signature
+        BIGINT seq_no
+        CHAR_66 digest_hash
+        ENUM chain_status "pending | recorded | failed"
+        DATETIME created_at
+        DATETIME deleted_at
+    }
 
-  messages {
-    UUID message_id PK
-    UUID sender_id FK
-    UUID recipient_id FK
-    VARCHAR enc
-    TEXT ciphertext
-    CHAR nonce
-    TEXT signature
-    BIGINT seq_no
-    CHAR digest_hash
-    ENUM chain_status
-    DATETIME created_at
-    DATETIME deleted_at
-  }
+    message_shares {
+        CHAR_36 id PK
+        CHAR_36 message_id FK
+        CHAR_36 shared_by_id FK
+        CHAR_36 shared_with_id FK
+        VARCHAR_64 enc
+        TEXT ciphertext
+        CHAR_16 nonce
+        DATETIME created_at
+        DATETIME revoked_at
+    }
 
-  message_shares {
-    UUID id PK
-    UUID message_id FK
-    UUID shared_by_id FK
-    UUID shared_with_id FK
-    VARCHAR enc
-    TEXT ciphertext
-    CHAR nonce
-    DATETIME created_at
-    DATETIME revoked_at
-  }
+    blockchain_records {
+        CHAR_36 id PK
+        CHAR_36 message_id FK
+        VARCHAR_66 tx_hash UK
+        VARCHAR_66 digest_hash
+        DATETIME created_at
+    }
 
-  blockchain_records {
-    UUID id PK
-    UUID message_id FK
-    VARCHAR tx_hash UK
-    VARCHAR digest_hash
-    DATETIME created_at
-  }
+    users ||--o{ login_attempts : "tracks"
+    users ||--o{ public_keys : "owns"
+    users ||--o{ public_key_history : "audit trail"
+    users ||--o{ messages : "sends"
+    users ||--o{ messages : "receives"
+    messages ||--o{ message_shares : "forwarded as"
+    users ||--o{ message_shares : "shared by"
+    users ||--o{ message_shares : "shared with"
+    messages ||--o{ blockchain_records : "recorded on-chain"
 ```
 
 DDL lives in [scripts/init-db.js](scripts/init-db.js).
