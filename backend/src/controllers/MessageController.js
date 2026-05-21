@@ -8,12 +8,15 @@ class MessageController {
       // Destructure explicitly so a client can't override senderId via the body.
       // `digest` is the client-computed keccak256 of plaintext — the server
       // relays it to the blockchain listener without inspection.
-      const { recipientId, ciphertext, nonce, digest } = req.body;
+      const { recipientId, enc, ciphertext, nonce, signature, seqNo, digest } = req.body;
       const result = await this._messageService.sendMessage({
         senderId: req.user.id,
         recipientId,
+        enc,
         ciphertext,
         nonce,
+        signature,
+        seqNo,
         digest,
       });
       res.status(201).json({ data: result });
@@ -66,11 +69,12 @@ class MessageController {
 
   forward = async (req, res, next) => {
     try {
-      const { recipientId, ciphertext, nonce } = req.body;
+      const { recipientId, enc, ciphertext, nonce } = req.body;
       const result = await this._messageService.forwardMessage({
         messageId: req.params.id,
         forwarderId: req.user.id,
         recipientId,
+        enc,
         ciphertext,
         nonce,
       });

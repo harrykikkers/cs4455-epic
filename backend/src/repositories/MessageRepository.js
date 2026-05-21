@@ -5,14 +5,16 @@ class MessageRepository {
     this._pool = pool;
   }
 
-  async create({ messageId, senderId, recipientId, ciphertext, nonce, digestHash }) {
+  async create({ messageId, senderId, recipientId, enc, ciphertext, nonce, signature, seqNo, digestHash }) {
     const sql = `
       INSERT INTO messages
-        (message_id, sender_id, recipient_id, ciphertext, nonce, digest_hash, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, NOW())
+        (message_id, sender_id, recipient_id, enc, ciphertext, nonce, signature, seq_no, digest_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
     `;
     try {
-      await this._pool.execute(sql, [messageId, senderId, recipientId, ciphertext, nonce, digestHash]);
+      await this._pool.execute(sql, [
+        messageId, senderId, recipientId, enc, ciphertext, nonce, signature, seqNo, digestHash,
+      ]);
     } catch (err) {
       // Unique (recipient_id, nonce) — an active attacker replaying a
       // captured ciphertext+nonce hits this. AEAD already prevents the
@@ -98,7 +100,8 @@ class MessageRepository {
     const lim = Number.parseInt(limit, 10);
     const off = Number.parseInt(offset, 10);
     const [rows] = await this._pool.execute(
-      `SELECT m.message_id, m.sender_id, m.ciphertext, m.nonce,
+      `SELECT m.message_id, m.sender_id, m.enc, m.ciphertext, m.nonce,
+              m.signature, m.seq_no, m.digest_hash, m.chain_status,
               m.created_at, u.username AS sender_username
        FROM messages m
        JOIN users u ON u.user_id = m.sender_id
@@ -114,7 +117,8 @@ class MessageRepository {
     const lim = Number.parseInt(limit, 10);
     const off = Number.parseInt(offset, 10);
     const [rows] = await this._pool.execute(
-      `SELECT m.message_id, m.recipient_id, m.ciphertext, m.nonce,
+      `SELECT m.message_id, m.recipient_id, m.enc, m.ciphertext, m.nonce,
+              m.signature, m.seq_no, m.digest_hash, m.chain_status,
               m.created_at, u.username AS recipient_username
        FROM messages m
        JOIN users u ON u.user_id = m.recipient_id
@@ -145,14 +149,14 @@ class MessageRepository {
     return rows;
   }
 
-  async createShare({ id, messageId, sharedById, sharedWithId, ciphertext, nonce }) {
+  async createShare({ id, messageId, sharedById, sharedWithId, enc, ciphertext, nonce }) {
     const sql = `
       INSERT INTO message_shares
-        (id, message_id, shared_by_id, shared_with_id, ciphertext, nonce, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, NOW())
+        (id, message_id, shared_by_id, shared_with_id, enc, ciphertext, nonce, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
     `;
     try {
-      await this._pool.execute(sql, [id, messageId, sharedById, sharedWithId, ciphertext, nonce]);
+      await this._pool.execute(sql, [id, messageId, sharedById, sharedWithId, enc, ciphertext, nonce]);
     } catch (err) {
       if (err.code === 'ER_DUP_ENTRY') {
         throw new ConflictError('Duplicate nonce for this share recipient — possible replay');

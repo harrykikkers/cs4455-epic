@@ -15,11 +15,11 @@ class MessageService {
     this._blockchain = blockchainService;
   }
 
-  async sendMessage({ senderId, recipientId, ciphertext, nonce, digest }) {
+  async sendMessage({ senderId, recipientId, enc, ciphertext, nonce, signature, seqNo, digest }) {
     const messageId = uuidv4();
 
     await this._messageRepo.create({
-      messageId, senderId, recipientId, ciphertext, nonce, digestHash: digest,
+      messageId, senderId, recipientId, enc, ciphertext, nonce, signature, seqNo, digestHash: digest,
     });
 
     // Hand the client-supplied digest to the blockchain service. The server
@@ -76,7 +76,7 @@ class MessageService {
     return message;
   }
 
-  async forwardMessage({ messageId, forwarderId, recipientId, ciphertext, nonce }) {
+  async forwardMessage({ messageId, forwarderId, recipientId, enc, ciphertext, nonce }) {
     // Authorisation: the forwarder must have access to the message —
     // either as the sender, the original recipient, or a current share
     // recipient. getMessage() throws NotFoundError / ForbiddenError if not.
@@ -89,6 +89,7 @@ class MessageService {
       messageId,
       sharedById: forwarderId,
       sharedWithId: recipientId,
+      enc,
       ciphertext,
       nonce,
     });

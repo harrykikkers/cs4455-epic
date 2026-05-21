@@ -11,10 +11,19 @@ const { ConflictError, UnauthorisedError } = require('../utils/errors');
 const logger = require('../utils/logger');
 const { audit } = require('../utils/logger');
 
+// Lockout policy: more than this many failures inside the window blocks
+// further attempts until the window slides past. Matches the comment in
+// the login_attempts schema (5 failures within 15 minutes).
+const LOCKOUT_MAX_FAILURES = 5;
+const LOCKOUT_WINDOW_MS = 15 * 60 * 1000;
+
 class AuthService {
-  constructor(userRepository, passwordHasher) {
+  constructor(userRepository, passwordHasher, loginAttemptRepository = null) {
     this._userRepo = userRepository;
     this._passwordHasher = passwordHasher;
+    // Optional — services constructed in older tests can omit it and the
+    // login flow falls back to express-rate-limit alone.
+    this._loginAttempts = loginAttemptRepository;
   }
 
   async register({ username, password }) {
@@ -78,6 +87,21 @@ class AuthService {
     return {
       token,
       user: { userId: user.user_id, username: user.username },
+    };
+  }
+
+  async getUserProfile(userId) {
+    const user = await this._userRepo.findById(userId);
+    if (!user) {
+      throw new UnauthorisedError('User not found');
+    }
+    // Never expose password_hash. The middleware has already verified the
+    // token belongs to this user, so the rest is safe to surface.
+    return {
+      userId: user.user_id,
+      username: user.username,
+      createdAt: user.created_at,
+      passwordChangedAt: user.password_changed_at,
     };
   }
 

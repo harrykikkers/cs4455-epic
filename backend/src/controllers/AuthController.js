@@ -39,14 +39,14 @@ class AuthController {
     }
   };
 
-  async me(req, res, next) {
-  try {
-    const user = await this._authService.getUserProfile(req.user.id);
-    res.json({ data: user });
-  } catch (err) {
-    next(err);
-  }
-}
+  me = async (req, res, next) => {
+    try {
+      const user = await this._authService.getUserProfile(req.user.id);
+      res.json({ data: user });
+    } catch (err) {
+      next(err);
+    }
+  };
 }
 
 module.exports = AuthController;
