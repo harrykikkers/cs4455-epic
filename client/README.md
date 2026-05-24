@@ -8,10 +8,12 @@ plaintext.
 
 ## Status
 
-This README describes the **target layout** for the client. The HTTP and
-session layers are the immediate focus. The crypto layer and GUI are
-deliberately scaffolded but **not implemented yet** — placeholders are
-called out below.
+This README describes the **target layout** for the client. The GUI and the
+auth/message flows against the backend are **implemented** (see
+[UI Layer](#ui-layer) and [User Flows](#user-flows)). The crypto layer is
+still scaffolded — the client currently sends placeholder crypto fields, so
+messages are not yet end-to-end encrypted. Remaining placeholders are called
+out below.
 
 ## Tech Stack
 
@@ -356,16 +358,58 @@ application boundary.
 
 ### Screens
 
-| Screen | Purpose |
-|--------|---------|
-| Login / Register | Username + password entry; register creates account and generates keypairs |
-| Inbox | List of received messages with sender, timestamp, and chain status |
-| Sent | List of sent messages |
-| Compose | Recipient picker (from key directory), plaintext input, send button |
-| Message detail | Decrypted plaintext, metadata, forward / revoke / delete / download actions |
-| Key warning | Banner shown when a peer's public key changes unexpectedly |
+The client is a single resizable window (titled **Zebra — Secure Messenger**)
+that swaps between three full-window frames — **Login**, **Register**, and
+**Main** — managed by `app.py`. The Main frame opens additional modal dialogs
+for details, settings, and prompts.
+
+| Frame / dialog | Purpose |
+|----------------|---------|
+| **Login** | Username + password entry, "Login" and "Create Account" buttons, inline error message. A built-in dev login (`test` / `test1234`) bypasses the backend and loads demo data. |
+| **Register** | Username, password (min 12 chars) and confirmation, with client-side validation and an animated progress indicator while the account is created. |
+| **Main — sidebar** | App header with the logged-in username, **+ New Chat**, a search box that filters chats, the scrollable conversation list (peer name, last-message preview, timestamp, and a **KEY CHANGED** badge when relevant), and **Account** / **Logout** buttons. |
+| **Main — chat panel** | Header with the active peer's name and a **Refresh** button, an optional key-change warning banner, the scrollable message thread, and a bottom input bar (text entry + **Send**). |
+| **Message bubble** | Sent messages align right, received left; undecrypted messages show an "Encrypted message" placeholder. A **⋯** toggle reveals per-message actions: **Details**, **Forward**, **Download**, and (for your own messages) **Delete**. |
+| **Message Details dialog** | Sender, date, message ID, chain status (click to view the blockchain proof), the message body, and a **Forwarded To** list with a **Revoke** button per recipient. |
+| **Key Change dialog** | Explains a peer's key change and offers **Accept New Key**, **View History**, or **Reject**. |
+| **Account Settings dialog** | Shows username and user ID and provides a change-password form (current + new + confirm, min 12 chars). |
+| **Prompts** | Lightweight input dialogs for **New Chat** and **Forward** (recipient username), plus a **Blockchain Proof** info dialog. |
+
+### User Flows
+
+- **Register → Login.** From Login, **Create Account** opens the Register
+  frame. Once the client-side checks pass (username + password present,
+  password ≥ 12 chars, confirmation matches), the client posts to the
+  backend and, on success, returns to Login to sign in.
+- **Browse and open a conversation.** After login the Main frame loads the
+  inbox and sent messages and groups them by peer into the sidebar. Clicking
+  a conversation opens its thread in the chat panel; **Refresh** reloads from
+  the server. The search box filters the list by peer name.
+- **Start a new chat.** **+ New Chat** prompts for a username, resolves it to
+  a user via the backend, and opens an empty thread (dev mode creates the
+  conversation locally).
+- **Send a message.** Type in the input bar and press **Send** or Enter. The
+  message appears in the thread; in live mode it is posted to the backend and
+  the thread reloads.
+- **Message actions.** A bubble's **⋯** menu opens **Details**, **Forward**,
+  **Download**, and **Delete** (own messages only). **Download** saves the
+  plaintext to a file; **Delete** asks for confirmation first.
+- **Forward & revoke.** **Forward** prompts for a recipient username and
+  re-sends the message to them. In **Details**, each recipient the message
+  was forwarded to can have their access **Revoke**d (with confirmation).
+- **Key-change warning.** When a peer's key has changed, a warning banner
+  appears above the thread and a **KEY CHANGED** badge shows on their
+  conversation row. Opening the Key Change dialog lets the user accept,
+  inspect history, or reject the new key.
+- **Account & logout.** **Account** opens settings with the username, user
+  ID, and change-password form. **Logout** clears the session and returns to
+  the Login screen.
 
 ### Message Download (C++ message store)
+
+**Current behavior:** the **Download** action saves the message's plaintext
+to a user-chosen `.txt` file via a native save dialog. The flow below is the
+planned integration with the C++ store.
 
 When a user downloads a message, the Python client decrypts it locally
 and hands the plaintext to the **C++ local message store** — a separate
@@ -389,8 +433,8 @@ decryption and handoff.
 CustomTkinter runs on the main thread. All network calls (API requests)
 and crypto operations run on background threads via `threading.Thread` to
 keep the UI responsive. Results are posted back to the main thread using
-Tkinter's `after()` method. The UI shows a loading indicator during
-network calls.
+Tkinter's `after()` method. The registration screen shows a progress
+indicator while it works; other screens update in place once results arrive.
 
 ## Concurrency Model
 
