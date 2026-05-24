@@ -445,15 +445,17 @@ class MainFrame(ctk.CTkFrame):
                          font=ctk.CTkFont(size=10),
                          text_color="#555").pack(padx=10, pady=(0, 6), anchor="w")
 
-        # Timestamp
-        ctk.CTkLabel(bubble, text=_format_time(m.get("created_at", "")),
-                     font=ctk.CTkFont(size=10), text_color=time_col).pack(
-                         anchor="w" if not mine else "e",
-                         padx=14, pady=(4, 2))
+        # Footer: timestamp + persistent actions toggle
+        footer = ctk.CTkFrame(bubble, fg_color="transparent")
+        footer.pack(fill="x", padx=10, pady=(2, 4))
 
-        # Action buttons — hidden until bubble is clicked
+        ctk.CTkLabel(footer, text=_format_time(m.get("created_at", "")),
+                     font=ctk.CTkFont(size=10), text_color=time_col).pack(
+                         side="left", padx=(4, 0))
+
+        # Action buttons — opened via the ⋯ toggle, closable by
+        # clicking ⋯ again or anywhere on the bubble
         action_btns = ctk.CTkFrame(bubble, fg_color="transparent")
-        # Not packed yet — toggled on click
 
         btn_kw = dict(height=24, font=ctk.CTkFont(size=11),
                       fg_color="transparent", border_width=1,
@@ -465,9 +467,16 @@ class MainFrame(ctk.CTkFrame):
             if action_btns.winfo_ismapped():
                 action_btns.pack_forget()
             else:
-                action_btns.pack(fill="x", padx=10, pady=(2, 8))
+                action_btns.pack(fill="x", padx=10, pady=(0, 8))
 
-        # Bind click to bubble and all its non-button children
+        actions_btn = ctk.CTkButton(
+            footer, text="⋯", width=30, height=20,
+            font=ctk.CTkFont(size=15, weight="bold"),
+            fg_color="transparent", hover_color=("#333333", "#333333"),
+            text_color="#999999", command=toggle_actions)
+        actions_btn.pack(side="right", padx=(0, 2))
+
+        # Clicking the bubble body also toggles (closes) the actions
         def _bind_recursive(widget):
             widget.bind("<Button-1>", toggle_actions)
             for child in widget.winfo_children():
