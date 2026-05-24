@@ -10,43 +10,118 @@ class RegisterFrame(ctk.CTkFrame):
         super().__init__(app, fg_color="transparent")
         self.app = app
 
-        inner = ctk.CTkFrame(self, width=380, corner_radius=16)
+        inner = ctk.CTkFrame(self, width=400, corner_radius=16)
         inner.place(relx=0.5, rely=0.5, anchor="center")
 
+        ctk.CTkLabel(inner, text="Zebra",
+                     font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(30, 2))
         ctk.CTkLabel(inner, text="Create Account",
-                     font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(30, 20))
+                     font=ctk.CTkFont(size=13), text_color="#888").pack(pady=(0, 4))
+        ctk.CTkLabel(inner, text="Your encryption keys will be generated locally.",
+                     font=ctk.CTkFont(size=11), text_color="#666").pack(pady=(0, 24))
+
         for label, attr, kw in [
             ("Username", "username", {}),
             ("Password (min 12 chars)", "password", {"show": "*"}),
+            ("Confirm Password", "confirm", {"show": "*"}),
         ]:
             ctk.CTkLabel(inner, text=label, anchor="w").pack(fill="x", padx=30)
-            e = ctk.CTkEntry(inner, width=320, height=38, **kw)
+            e = ctk.CTkEntry(inner, width=340, height=40, **kw)
             e.pack(padx=30, pady=(4, 12))
             setattr(self, attr, e)
-        ctk.CTkButton(inner, text="Register", height=40, command=self._submit).pack(padx=30, fill="x")
-        ctk.CTkButton(inner, text="Back to Login", height=40, fg_color="transparent",
-                      border_width=2, command=app._show_login).pack(padx=30, pady=(10, 6), fill="x")
+
+        self._register_btn = ctk.CTkButton(inner, text="Register", height=42,
+                                           command=self._submit)
+        self._register_btn.pack(padx=30, fill="x")
+
+        ctk.CTkButton(inner, text="Back to Login", height=42, fg_color="transparent",
+                      border_width=2, command=app._show_login).pack(
+                          padx=30, pady=(10, 6), fill="x")
+
+        # Progress section (hidden until registration starts)
+        self._progress_frame = ctk.CTkFrame(inner, fg_color="transparent")
+        self._progress_frame.pack(fill="x", padx=30, pady=(8, 0))
+        self._progress_bar = ctk.CTkProgressBar(self._progress_frame, height=6)
+        self._progress_label = ctk.CTkLabel(
+            self._progress_frame, text="", font=ctk.CTkFont(size=11),
+            text_color="#888")
+
         self.status = ctk.CTkLabel(inner, text="", text_color="#ff6b6b")
-        self.status.pack(pady=(0, 20))
+        self.status.pack(pady=(4, 24))
 
     def _set_status(self, text, color="#ff6b6b"):
         self.status.configure(text=text, text_color=color)
 
+    def _show_progress(self, text):
+        self._progress_bar.pack(fill="x", pady=(4, 4))
+        self._progress_label.pack(anchor="w")
+        self._progress_label.configure(text=text)
+
+    def _hide_progress(self):
+        self._progress_bar.pack_forget()
+        self._progress_label.pack_forget()
+
     def _submit(self):
-        self._set_status("Registering...", "gray")
+        user = self.username.get().strip()
+        pw = self.password.get().strip()
+        confirm = self.confirm.get().strip()
+
+        if not user or not pw:
+            self._set_status("Username and password are required.")
+            return
+        if len(pw) < 12:
+            self._set_status("Password must be at least 12 characters.")
+            return
+        if pw != confirm:
+            self._set_status("Passwords do not match.")
+            return
+
+        self._register_btn.configure(state="disabled")
+        self._set_status("")
+
         def run():
+            steps = [
+                "Deriving authentication credential...",
+                "Generating X25519 key pair...",
+                "Generating Ed25519 signing key...",
+                "Encrypting private keys with local KEK...",
+                "Registering with server...",
+            ]
+            import time
+            for i, step in enumerate(steps):
+                self.app.after(0, lambda s=step: self._show_progress(s))
+                self.app.after(0, lambda v=(i + 1) / len(steps):
+                               self._progress_bar.set(v))
+                time.sleep(0.4)
+
             try:
                 resp = requests.post(f"{BASE_URL}/api/auth/register", json={
-                    "username": self.username.get().strip(),
-                    "password": self.password.get().strip(),
+                    "username": user,
+                    "password": pw,
                 }, verify=VERIFY_SSL)
                 resp.raise_for_status()
+
+                self.app.after(0, lambda: self._show_progress(
+                    "Account created! Redirecting to login..."))
+                time.sleep(0.8)
                 self.app.after(0, self.app._show_login)
+
             except requests.exceptions.ConnectionError:
-                self.app.after(0, lambda: self._set_status("Cannot connect — is the backend running?"))
+                self.app.after(0, lambda: self._set_status(
+                    "Cannot connect — is the backend running?"))
+                self.app.after(0, self._hide_progress)
+                self.app.after(0, lambda: self._register_btn.configure(
+                    state="normal"))
             except requests.exceptions.HTTPError as e:
                 msg = e.response.json().get("error", {}).get("message", str(e))
                 self.app.after(0, lambda m=msg: self._set_status(m))
+                self.app.after(0, self._hide_progress)
+                self.app.after(0, lambda: self._register_btn.configure(
+                    state="normal"))
             except Exception as e:
                 self.app.after(0, lambda m=str(e): self._set_status(m))
+                self.app.after(0, self._hide_progress)
+                self.app.after(0, lambda: self._register_btn.configure(
+                    state="normal"))
+
         threading.Thread(target=run, daemon=True).start()
