@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secure-messenger-client"
+version = "0.1.0"
+description = "Python desktop client for the CS4455 Epic secure messenger"
+requires-python = ">=3.11"
+dependencies = [
+    "customtkinter>=5.2",
+    "requests>=2.31",
+    "pyhpke>=0.5",
+    "cryptography>=42.0",
+    "argon2-cffi>=23.1",
+    "pycryptodome>=3.20",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "responses>=0.25",
+]
+
+# Flat layout: modules live directly under src/ as top-level modules and
+# packages, so there is no single importable package name. Launch the GUI
+# with `python src/__main__.py`.
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["config", "session", "errors"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["api*", "crypto*", "services*", "models*", "ui*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]

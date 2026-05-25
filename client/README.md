@@ -8,12 +8,14 @@ plaintext.
 
 ## Status
 
-This README describes the **target layout** for the client. The GUI and the
-auth/message flows against the backend are **implemented** (see
-[UI Layer](#ui-layer) and [User Flows](#user-flows)). The crypto layer is
-still scaffolded — the client currently sends placeholder crypto fields, so
-messages are not yet end-to-end encrypted. Remaining placeholders are called
-out below.
+The package layout below is **in place**, and the GUI plus the auth/message
+flows against the backend are **implemented** (see [UI Layer](#ui-layer) and
+[User Flows](#user-flows)). The `api`, `services`, `crypto`, and `models`
+layers are **scaffolded** — their public surfaces exist but most methods
+raise `NotImplementedError`, and the UI still talks to the backend over HTTP
+directly rather than through these layers. The crypto layer in particular is
+unbuilt: the client sends placeholder crypto fields, so messages are **not
+yet end-to-end encrypted**. Remaining placeholders are called out below.
 
 ## Tech Stack
 
@@ -31,7 +33,9 @@ out below.
     encrypting private keys at rest)
   - `pycryptodome` — keccak256 digest computation (blockchain anchoring)
 - **Config**: `python-dotenv` for `.env` loading
-- **Testing**: `pytest` + `responses` (mock HTTP)
+- **Testing**: `pytest`. The current suite is integration tests that exercise
+  a running backend; `responses` is available (the `dev` extra) for future
+  mocked unit tests.
 
 ## Client Flow
 
@@ -63,52 +67,59 @@ Each layer has a single responsibility:
 
 ```
 client/
-├── src/
-│   └── secure_messenger_client/
+├── src/                          # flat layout — modules below are top-level
+│   ├── __main__.py               # Entry point — launches the GUI
+│   ├── config.py                 # Env config (server URL, keystore path)
+│   ├── session.py                # In-memory session state (JWT, current user)
+│   ├── errors.py                 # Custom exception hierarchy
+│   ├── api/                      # HTTP client — one module per route group
+│   │   ├── __init__.py
+│   │   ├── client.py             # Base HTTP client (session, headers, errors)
+│   │   ├── auth.py               # /api/auth/* wrappers
+│   │   ├── messages.py           # /api/messages/* wrappers
+│   │   └── keys.py               # /api/keys/* wrappers
+│   ├── crypto/                   # Local cryptography — all E2EE happens here
+│   │   ├── __init__.py
+│   │   ├── hpke.py               # HPKE Mode_Base seal / open (pyhpke)
+│   │   ├── signing.py            # Ed25519 sign / verify (cryptography)
+│   │   ├── aead.py               # AES-256-GCM encrypt / decrypt (cryptography)
+│   │   ├── kdf.py                # HKDF-SHA256 + Argon2id KEK derivation
+│   │   ├── digest.py             # keccak256(plaintext) → 0x-prefixed hex (pycryptodome)
+│   │   └── keystore.py           # Local private key storage + KEK + pinned peer keys
+│   ├── services/                 # Business logic
+│   │   ├── __init__.py
+│   │   ├── auth_service.py       # register, login, password change
+│   │   ├── message_service.py    # send / receive / forward / revoke / delete
+│   │   ├── key_service.py        # publish own key, fetch + pin peer keys, reconcile history
+│   │   └── chain_service.py      # fetch chain proof for a message
+│   ├── models/                   # Typed DTOs (dataclasses)
+│   │   ├── __init__.py
+│   │   ├── user.py
+│   │   ├── message.py
+│   │   └── key.py
+│   └── ui/                       # CustomTkinter GUI
 │       ├── __init__.py
-│       ├── __main__.py           # Entry point — launches GUI
-│       ├── config.py             # Env config (server URL, keystore path)
-│       ├── api/                  # HTTP client — one module per route group
-│       │   ├── __init__.py
-│       │   ├── client.py         # Base HTTP client (session, headers, errors)
-│       │   ├── auth.py           # /api/auth/* wrappers
-│       │   ├── messages.py       # /api/messages/* wrappers
-│       │   └── keys.py           # /api/keys/* wrappers
-│       ├── crypto/               # Local cryptography — all E2EE happens here
-│       │   ├── __init__.py
-│       │   ├── hpke.py           # HPKE Mode_Base seal / open (pyhpke)
-│       │   ├── signing.py        # Ed25519 sign / verify (cryptography)
-│       │   ├── aead.py           # AES-256-GCM encrypt / decrypt (cryptography)
-│       │   ├── kdf.py            # HKDF-SHA256 key derivation + domain separation (cryptography)
-│       │   ├── digest.py         # keccak256(plaintext) → 0x-prefixed hex (pycryptodome)
-│       │   └── keystore.py       # Local private key storage + KEK + pinned peer keys
-│       ├── services/             # Business logic
-│       │   ├── __init__.py
-│       │   ├── auth_service.py   # register, login, password change
-│       │   ├── message_service.py# send / receive / forward / revoke / delete
-│       │   ├── key_service.py    # publish own key, fetch + pin peer keys, reconcile history
-│       │   └── chain_service.py  # fetch chain proof for a message
-│       ├── models/               # Typed DTOs (dataclasses)
-│       │   ├── __init__.py
-│       │   ├── user.py
-│       │   ├── message.py
-│       │   └── key.py
-│       ├── session.py            # In-memory session state (JWT, current user)
-│       ├── errors.py             # Custom exception hierarchy
-│       └── ui/                   # CustomTkinter GUI
-│           ├── __init__.py
-│           ├── app.py            # Main application window + frame manager
-│           ├── login_frame.py    # Login / register screen
-│           ├── inbox_frame.py    # Message list (inbox + sent tabs)
-│           ├── compose_frame.py  # Compose new message
-│           ├── message_frame.py  # Single message view (forward, revoke, delete, download)
-│           └── widgets.py        # Shared UI components (status bar, key warning banner)
-├── tests/                        # pytest tests, mocked HTTP
+│       ├── app.py                # Main application window + frame manager
+│       ├── login_frame.py        # Login screen
+│       ├── register_frame.py     # Register screen
+│       ├── main_frame.py         # Chat UI: sidebar + thread + compose (monolith — see note)
+│       ├── inbox_frame.py        # (planned) message list, to be split out of main_frame
+│       ├── compose_frame.py      # (planned) compose, to be split out of main_frame
+│       ├── message_frame.py      # (planned) single-message view, to be split out of main_frame
+│       └── widgets.py            # (planned) shared UI components (status bar, key warning banner)
+├── tests/                        # pytest tests (integration — need a running backend)
 ├── .env.example                  # SERVER_URL, KEYSTORE_PATH, etc.
 ├── .gitignore
 ├── pyproject.toml
 └── README.md
 ```
+
+This is a **flat layout**: the modules under `src/` are top-level (`config`,
+`api`, `ui`, …) rather than nested under a single package, so there is no
+`secure_messenger_client` import name and no `python -m` entry point — run
+the app via the script path shown in [Setup](#setup). The chat UI currently
+lives entirely in `ui/main_frame.py`; `inbox_frame`/`compose_frame`/
+`message_frame`/`widgets` are stubs for the planned decomposition.
 
 ## Setup
 
@@ -126,15 +137,15 @@ python -m venv .venv
 source .venv/bin/activate      # macOS / Linux
 # .venv\Scripts\activate       # Windows
 
-# Install in editable mode so `import secure_messenger_client` works while you develop
-pip install -e .
+# Install dependencies (editable). The [dev] extra adds pytest + responses.
+pip install -e ".[dev]"
 
 # Copy and edit environment config
 cp .env.example .env
 # Edit .env — set SERVER_URL to your backend, KEYSTORE_PATH for local keys
 
-# Launch the client
-python -m secure_messenger_client
+# Launch the client (flat layout — run the entry script under src/)
+python src/__main__.py
 ```
 
 ### Environment variables
@@ -145,6 +156,19 @@ python -m secure_messenger_client
 | `KEYSTORE_PATH` | `~/.secure_messenger/keystore.json` | Where private keys are stored (encrypted) |
 | `REQUEST_TIMEOUT` | `10` | HTTP timeout in seconds |
 | `LOG_LEVEL` | `INFO` | Python logging level |
+
+### Running tests
+
+```bash
+# from the client/ directory, with the venv active and `pip install -e ".[dev]"` done
+pytest
+```
+
+`pyproject.toml` puts `src/` and `tests/` on the path, so no manual
+`PYTHONPATH` is needed. The current suite is **integration tests** — they
+register users, send messages, etc. against a live backend, so a server must
+be running at `SERVER_URL` (default `http://localhost:3000`). With no backend
+up the tests fail fast with `ConnectionError`.
 
 ## Server Interaction
 

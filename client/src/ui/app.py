@@ -1,12 +1,15 @@
 import urllib3
 import customtkinter as ctk
 
-import config  # noqa: F401 — applies ctk theme on import
-from views.login import LoginFrame
-from views.register import RegisterFrame
-from views.main import MainFrame
+from .login_frame import LoginFrame
+from .register_frame import RegisterFrame
+from .main_frame import MainFrame
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# CustomTkinter theme (kept here so config.py stays GUI-free).
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
 
 class App(ctk.CTk):
