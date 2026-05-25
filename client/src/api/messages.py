@@ -52,9 +52,14 @@ class MessageAPI(BaseClient):
             "nonce": nonce,
         })
 
-    def revoke(self, message_id: str) -> Any:
-        """POST /api/messages/:id/revoke — revoke shared access."""
-        return self._post(f"/api/messages/{message_id}/revoke")
+    def revoke(self, message_id: str, user_id: str) -> Any:
+        """POST /api/messages/:id/revoke — revoke a user's shared access.
+
+        ``user_id`` is the share recipient to revoke; the backend requires it
+        in the body (``{ userId }``) since a message can be shared with many.
+        """
+        return self._post(f"/api/messages/{message_id}/revoke",
+                          json={"userId": user_id})
 
     def delete(self, message_id: str) -> Any:
         """DELETE /api/messages/:id — soft delete."""

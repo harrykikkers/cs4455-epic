@@ -49,8 +49,8 @@ class MessageService:
         """
         raise NotImplementedError("re-encryption for forwarding not yet implemented")
 
-    def revoke(self, message_id: str):
-        return self.api.revoke(message_id)
+    def revoke(self, message_id: str, user_id: str):
+        return self.api.revoke(message_id, user_id)
 
     def delete(self, message_id: str):
         return self.api.delete(message_id)
