@@ -62,7 +62,7 @@ class KeyService {
     if (keys.length === 0) {
       throw new NotFoundError('No public keys found for this user');
     }
-    return keys;
+    return keys.map(toKeyDTO);
   }
 
   async getPublicKeyByType(userId, keyType) {
@@ -70,16 +70,51 @@ class KeyService {
     if (!key) {
       throw new NotFoundError(`No ${keyType} key found for this user`);
     }
-    return key;
+    return toKeyDTO(key);
   }
 
   async listPublicKeys() {
-    return this._keyRepo.getAllPublicKeys();
+    const keys = await this._keyRepo.getAllPublicKeys();
+    return keys.map(toDirectoryDTO);
   }
 
   async getKeyHistory(userId, keyType) {
-    return this._keyRepo.getHistory(userId, keyType);
+    const history = await this._keyRepo.getHistory(userId, keyType);
+    return history.map(toHistoryDTO);
   }
+}
+
+// Raw key rows are stored snake_case; the API exposes camelCase to match the
+// rest of the surface (auth payloads, request bodies, chain proof).
+
+function toKeyDTO(row) {
+  return {
+    publicKey: row.public_key,
+    keyType: row.key_type,
+    version: row.version,
+    createdAt: row.created_at,
+    rotatedAt: row.rotated_at,
+  };
+}
+
+function toDirectoryDTO(row) {
+  return {
+    userId: row.user_id,
+    username: row.username,
+    publicKey: row.public_key,
+    keyType: row.key_type,
+    version: row.version,
+  };
+}
+
+function toHistoryDTO(row) {
+  return {
+    publicKey: row.public_key,
+    keyType: row.key_type,
+    version: row.version,
+    pinnedAt: row.pinned_at,
+    rotatedAt: row.rotated_at,
+  };
 }
 
 module.exports = KeyService;

@@ -44,19 +44,21 @@ class MessageService {
     const record = await this._messageRepo.findChainRecord(messageId);
     return {
       messageId,
-      digestHash: message.digest_hash || null,
-      chainStatus: message.chain_status,
+      digestHash: message.digestHash || null,
+      chainStatus: message.chainStatus,
       txHash: record ? record.tx_hash : null,
       recordedAt: record ? record.created_at : null,
     };
   }
 
   async getInbox(userId, options) {
-    return this._messageRepo.findByRecipient(userId, options);
+    const rows = await this._messageRepo.findByRecipient(userId, options);
+    return rows.map(toMessageDTO);
   }
 
   async getSent(userId, options) {
-    return this._messageRepo.findBySender(userId, options);
+    const rows = await this._messageRepo.findBySender(userId, options);
+    return rows.map(toMessageDTO);
   }
 
   async getMessage(messageId, userId) {
@@ -65,6 +67,8 @@ class MessageService {
       throw new NotFoundError('Message not found');
     }
 
+    // Access control runs against the raw row (snake_case) before it is
+    // mapped to the API shape below.
     if (message.sender_id !== userId && message.recipient_id !== userId) {
       const shares = await this._messageRepo.findSharedWith(messageId);
       const isShared = shares.some((s) => s.shared_with_id === userId);
@@ -73,7 +77,7 @@ class MessageService {
       }
     }
 
-    return message;
+    return toMessageDTO(message);
   }
 
   async forwardMessage({ messageId, forwarderId, recipientId, enc, ciphertext, nonce }) {
@@ -122,6 +126,32 @@ class MessageService {
     }
     logger.info(`Message soft-deleted: ${messageId} by ${userId}`);
   }
+}
+
+/**
+ * Maps a raw message row (snake_case, as stored) to the camelCase shape the
+ * API exposes — the same convention AuthService and getChainProof return, and
+ * the convention the request bodies already use. Only emits the columns
+ * present on the row, so it serves the inbox view (sender side), the sent
+ * view (recipient side), and the full single-message view alike.
+ */
+function toMessageDTO(row) {
+  const dto = {
+    messageId: row.message_id,
+    enc: row.enc,
+    ciphertext: row.ciphertext,
+    nonce: row.nonce,
+    signature: row.signature,
+    seqNo: row.seq_no,
+    digestHash: row.digest_hash,
+    chainStatus: row.chain_status,
+    createdAt: row.created_at,
+  };
+  if (row.sender_id !== undefined) dto.senderId = row.sender_id;
+  if (row.recipient_id !== undefined) dto.recipientId = row.recipient_id;
+  if (row.sender_username !== undefined) dto.senderUsername = row.sender_username;
+  if (row.recipient_username !== undefined) dto.recipientUsername = row.recipient_username;
+  return dto;
 }
 
 module.exports = MessageService;

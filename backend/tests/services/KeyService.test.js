@@ -47,7 +47,7 @@ describe('KeyService', () => {
       expect(result).toEqual({ status: 'pinned', version: 1 });
 
       const stored = await svc.getPublicKeyByType('user-1', 'x25519');
-      expect(stored.public_key).toBe('alice-key-v1');
+      expect(stored.publicKey).toBe('alice-key-v1');
       expect(stored.version).toBe(1);
     });
 
@@ -89,7 +89,7 @@ describe('KeyService', () => {
       // Pinned key must NOT be overwritten by a rejected rotation, and no
       // history row should have been written either.
       const current = await svc.getPublicKeyByType('user-1', 'x25519');
-      expect(current.public_key).toBe('old-key');
+      expect(current.publicKey).toBe('old-key');
       expect(current.version).toBe(1);
 
       const history = await svc.getKeyHistory('user-1', 'x25519');
@@ -125,7 +125,7 @@ describe('KeyService', () => {
         publicKey: 'key-v1',
         keyType: 'x25519',
       });
-      const originalPinnedAt = (await svc.getPublicKeyByType('user-1', 'x25519')).created_at;
+      const originalPinnedAt = (await svc.getPublicKeyByType('user-1', 'x25519')).createdAt;
 
       const result = await svc.publishKey({
         userId: 'user-1',
@@ -141,21 +141,21 @@ describe('KeyService', () => {
       });
 
       const current = await svc.getPublicKeyByType('user-1', 'x25519');
-      expect(current.public_key).toBe('key-v2');
+      expect(current.publicKey).toBe('key-v2');
       expect(current.version).toBe(2);
-      expect(current.rotated_at).toBeInstanceOf(Date);
+      expect(current.rotatedAt).toBeInstanceOf(Date);
 
       const history = await svc.getKeyHistory('user-1', 'x25519');
       expect(history).toHaveLength(1);
       expect(history[0]).toMatchObject({
-        public_key: 'key-v1',
-        key_type: 'x25519',
+        publicKey: 'key-v1',
+        keyType: 'x25519',
         version: 1,
         // The audit trail is only useful if pinned_at survives — it is what
         // a client uses to reconcile "when was this key first trusted?".
-        pinned_at: originalPinnedAt,
+        pinnedAt: originalPinnedAt,
       });
-      expect(history[0].rotated_at).toBeInstanceOf(Date);
+      expect(history[0].rotatedAt).toBeInstanceOf(Date);
     });
 
     test('keeps key types isolated within a single user', async () => {
@@ -177,7 +177,7 @@ describe('KeyService', () => {
       expect(result).toEqual({ status: 'pinned', version: 1 });
 
       const both = await svc.getPublicKeys('user-1');
-      expect(both.map((k) => k.key_type).sort()).toEqual(['ed25519', 'x25519']);
+      expect(both.map((k) => k.keyType).sort()).toEqual(['ed25519', 'x25519']);
     });
 
     test('increments versions monotonically across multiple rotations', async () => {
@@ -211,10 +211,10 @@ describe('KeyService', () => {
 
       const current = await svc.getPublicKeyByType('user-1', 'x25519');
       expect(current.version).toBe(3);
-      expect(current.public_key).toBe('v3');
+      expect(current.publicKey).toBe('v3');
 
       const history = await svc.getKeyHistory('user-1', 'x25519');
-      expect(history.map((h) => h.public_key)).toEqual(['v1', 'v2']);
+      expect(history.map((h) => h.publicKey)).toEqual(['v1', 'v2']);
       expect(history.map((h) => h.version)).toEqual([1, 2]);
     });
   });
@@ -237,7 +237,7 @@ describe('KeyService', () => {
       const keys = await svc.getPublicKeys('user-1');
 
       expect(keys).toHaveLength(2);
-      expect(keys.map((k) => k.key_type).sort()).toEqual(['ed25519', 'x25519']);
+      expect(keys.map((k) => k.keyType).sort()).toEqual(['ed25519', 'x25519']);
     });
 
     test('throws NotFoundError when user has no keys', async () => {
@@ -258,8 +258,8 @@ describe('KeyService', () => {
       });
 
       const key = await svc.getPublicKeyByType('user-1', 'x25519');
-      expect(key.public_key).toBe('kem-key');
-      expect(key.key_type).toBe('x25519');
+      expect(key.publicKey).toBe('kem-key');
+      expect(key.keyType).toBe('x25519');
     });
 
     test('throws NotFoundError when the requested key type does not exist for the user', async () => {
@@ -291,7 +291,7 @@ describe('KeyService', () => {
       const directory = await svc.listPublicKeys();
 
       expect(directory).toHaveLength(3);
-      expect(directory.map((r) => `${r.username}:${r.key_type}`).sort()).toEqual([
+      expect(directory.map((r) => `${r.username}:${r.keyType}`).sort()).toEqual([
         'alice:ed25519',
         'alice:x25519',
         'bob:ed25519',
@@ -347,7 +347,7 @@ describe('KeyService', () => {
       });
 
       const history = await svc.getKeyHistory('user-1', 'x25519');
-      expect(history.map((h) => h.public_key)).toEqual(['v1', 'v2', 'v3']);
+      expect(history.map((h) => h.publicKey)).toEqual(['v1', 'v2', 'v3']);
       expect(history.map((h) => h.version)).toEqual([1, 2, 3]);
     });
 
