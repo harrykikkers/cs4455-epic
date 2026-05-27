@@ -99,6 +99,9 @@ class MessageRepository {
     // is a number, but a caller passing strings would break). Coerce here.
     const lim = Number.parseInt(limit, 10);
     const off = Number.parseInt(offset, 10);
+    // mysql2 v3.x has a bug where LIMIT/OFFSET as bound parameters cause
+    // "Incorrect arguments to mysqld_stmt_execute". They are already coerced
+    // to integers above, so interpolating them directly is safe.
     const [rows] = await this._pool.execute(
       `SELECT m.message_id, m.sender_id, m.enc, m.ciphertext, m.nonce,
               m.signature, m.seq_no, m.digest_hash, m.chain_status,
@@ -107,8 +110,8 @@ class MessageRepository {
        JOIN users u ON u.user_id = m.sender_id
        WHERE m.recipient_id = ? AND m.deleted_at IS NULL
        ORDER BY m.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [recipientId, lim, off]
+       LIMIT ${lim} OFFSET ${off}`,
+      [recipientId]
     );
     return rows;
   }
@@ -124,8 +127,8 @@ class MessageRepository {
        JOIN users u ON u.user_id = m.recipient_id
        WHERE m.sender_id = ? AND m.deleted_at IS NULL
        ORDER BY m.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [senderId, lim, off]
+       LIMIT ${lim} OFFSET ${off}`,
+      [senderId]
     );
     return rows;
   }

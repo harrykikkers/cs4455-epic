@@ -39,6 +39,15 @@ class AuthController {
     }
   };
 
+  lookupByUsername = async (req, res, next) => {
+    try {
+      const user = await this._authService.lookupByUsername(req.query.username);
+      res.json({ data: user });
+    } catch (err) {
+      next(err);
+    }
+  };
+
   me = async (req, res, next) => {
     try {
       const user = await this._authService.getUserProfile(req.user.id);

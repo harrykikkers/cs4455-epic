@@ -193,6 +193,16 @@ async function init() {
 
   // --- messages table migrations ---
 
+  // deleted_at (soft-delete support — queries filter with deleted_at IS NULL)
+  try {
+    await pool.execute(
+      `ALTER TABLE messages ADD COLUMN deleted_at DATETIME NULL AFTER created_at`
+    );
+    console.log('Added messages.deleted_at');
+  } catch (err) {
+    if (err.code !== 'ER_DUP_FIELDNAME') throw err;
+  }
+
   // enc (HPKE encapsulated key)
   try {
     await pool.execute(

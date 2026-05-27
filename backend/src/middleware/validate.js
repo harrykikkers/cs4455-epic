@@ -126,6 +126,14 @@ const validate = {
     query('offset').optional().isInt({ min: 0 }).toInt(),
     handleValidation,
   ],
+
+  lookupUser: [
+    query('username')
+      .isString().withMessage('username query param required')
+      .trim()
+      .isLength({ min: 1 }).withMessage('username cannot be empty'),
+    handleValidation,
+  ],
 };
 
 module.exports = validate;

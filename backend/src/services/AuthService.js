@@ -7,7 +7,7 @@
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../config');
-const { ConflictError, UnauthorisedError } = require('../utils/errors');
+const { ConflictError, UnauthorisedError, NotFoundError } = require('../utils/errors');
 const logger = require('../utils/logger');
 const { audit } = require('../utils/logger');
 
@@ -119,6 +119,12 @@ class AuthService {
       createdAt: user.created_at,
       passwordChangedAt: user.password_changed_at,
     };
+  }
+
+  async lookupByUsername(username) {
+    const user = await this._userRepo.findByUsername(username);
+    if (!user) throw new NotFoundError('User not found');
+    return { userId: user.user_id, username: user.username };
   }
 
   async changePassword({ userId, currentPassword, newPassword }) {

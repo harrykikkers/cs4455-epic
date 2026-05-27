@@ -14,6 +14,7 @@ function authRoutes(authController, authMw) {
   router.post('/login', validate.login, authController.login);
   router.put('/password', authMw, validate.changePassword, authController.changePassword);
   router.get('/me', authMw, authController.me);
+  router.get('/user', authMw, validate.lookupUser, authController.lookupByUsername);
 
   return router;
 }
