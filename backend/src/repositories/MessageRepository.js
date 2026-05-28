@@ -5,15 +5,15 @@ class MessageRepository {
     this._pool = pool;
   }
 
-  async create({ messageId, senderId, recipientId, enc, ciphertext, nonce, signature, seqNo, digestHash }) {
+  async create({ messageId, senderId, recipientId, ciphertext, nonce, signature, seqNo, digestHash }) {
     const sql = `
       INSERT INTO messages
-        (message_id, sender_id, recipient_id, enc, ciphertext, nonce, signature, seq_no, digest_hash, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        (message_id, sender_id, recipient_id, ciphertext, nonce, signature, seq_no, digest_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
     `;
     try {
       await this._pool.execute(sql, [
-        messageId, senderId, recipientId, enc, ciphertext, nonce, signature, seqNo, digestHash,
+        messageId, senderId, recipientId, ciphertext, nonce, signature, seqNo, digestHash,
       ]);
     } catch (err) {
       // Unique (recipient_id, nonce) — an active attacker replaying a
@@ -103,7 +103,7 @@ class MessageRepository {
     // "Incorrect arguments to mysqld_stmt_execute". They are already coerced
     // to integers above, so interpolating them directly is safe.
     const [rows] = await this._pool.execute(
-      `SELECT m.message_id, m.sender_id, m.enc, m.ciphertext, m.nonce,
+      `SELECT m.message_id, m.sender_id, m.ciphertext, m.nonce,
               m.signature, m.seq_no, m.digest_hash, m.chain_status,
               m.created_at, u.username AS sender_username
        FROM messages m
@@ -120,7 +120,7 @@ class MessageRepository {
     const lim = Number.parseInt(limit, 10);
     const off = Number.parseInt(offset, 10);
     const [rows] = await this._pool.execute(
-      `SELECT m.message_id, m.recipient_id, m.enc, m.ciphertext, m.nonce,
+      `SELECT m.message_id, m.recipient_id, m.ciphertext, m.nonce,
               m.signature, m.seq_no, m.digest_hash, m.chain_status,
               m.created_at, u.username AS recipient_username
        FROM messages m
@@ -152,20 +152,47 @@ class MessageRepository {
     return rows;
   }
 
-  async createShare({ id, messageId, sharedById, sharedWithId, enc, ciphertext, nonce }) {
+  async createShare({ id, messageId, sharedById, sharedWithId, ciphertext, nonce, signature, seqNo, digestHash }) {
     const sql = `
       INSERT INTO message_shares
-        (id, message_id, shared_by_id, shared_with_id, enc, ciphertext, nonce, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+        (id, message_id, shared_by_id, shared_with_id, ciphertext, nonce, signature, seq_no, digest_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
     `;
     try {
-      await this._pool.execute(sql, [id, messageId, sharedById, sharedWithId, enc, ciphertext, nonce]);
+      await this._pool.execute(sql, [
+        id, messageId, sharedById, sharedWithId, ciphertext, nonce, signature, seqNo, digestHash,
+      ]);
     } catch (err) {
       if (err.code === 'ER_DUP_ENTRY') {
         throw new ConflictError('Duplicate nonce for this share recipient — possible replay');
       }
       throw err;
     }
+  }
+
+  /**
+   * Active (non-revoked) shares the user received. Mirrors findByRecipient:
+   * each row is a forward addressed to this user, joined to the forwarder's
+   * username and the original message's chain_status so the inbox can surface
+   * both. Plaintext stays client-side; the server only relays the crypto fields.
+   */
+  async findSharedWithUser(userId, { limit = 50, offset = 0 } = {}) {
+    const lim = Number.parseInt(limit, 10);
+    const off = Number.parseInt(offset, 10);
+    const [rows] = await this._pool.execute(
+      `SELECT ms.id AS share_id, ms.message_id, ms.shared_by_id AS sender_id,
+              ms.ciphertext, ms.nonce, ms.signature, ms.seq_no, ms.digest_hash,
+              ms.created_at, u.username AS sender_username,
+              om.chain_status AS chain_status
+       FROM message_shares ms
+       JOIN users u ON u.user_id = ms.shared_by_id
+       JOIN messages om ON om.message_id = ms.message_id
+       WHERE ms.shared_with_id = ? AND ms.revoked_at IS NULL AND om.deleted_at IS NULL
+       ORDER BY ms.created_at DESC
+       LIMIT ${lim} OFFSET ${off}`,
+      [userId]
+    );
+    return rows;
   }
 
   async revokeShare(messageId, sharedWithId) {

@@ -46,18 +46,22 @@ class AuthService:
         """
         return self.api.register(username, derive_auth_hash(password, username))
 
-    def change_password(self, current: str, new: str):
+    def change_password(self, current: str, new: str, keystore=None):
         """Change the account password.
 
         Both the current and new passwords are pre-hashed
         (``derive_auth_hash``) with the logged-in user's username before being
-        sent.
-
-        TODO: re-encrypt the keystore under a KEK derived from the cleartext
-        ``new`` password.
+        sent. After the server accepts the change, if a ``keystore`` is provided
+        its private keys are re-wrapped under a KEK derived from the *cleartext*
+        ``new`` password (``Keystore.change_password``), so the user is not
+        locked out of their own keys. The server call is authoritative and runs
+        first; the local re-wrap follows only on success.
         """
         username = self.session.username
-        return self.api.change_password(
+        result = self.api.change_password(
             derive_auth_hash(current, username),
             derive_auth_hash(new, username),
         )
+        if keystore is not None:
+            keystore.change_password(current, new)
+        return result

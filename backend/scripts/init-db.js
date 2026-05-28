@@ -73,14 +73,11 @@ async function init() {
 
     // Messaging table.
     //
-    // enc:           Base64-encoded HPKE encapsulated key (32-byte X25519
-    //                public key → 44 chars base64). The recipient needs this
-    //                to decapsulate and derive the shared secret.
     // nonce:         Base64-encoded 12-byte AES-256-GCM IV (16 chars base64).
     //                CHAR(16) enforces exact sizing.
     // ciphertext:    Base64-encoded AEAD ciphertext (variable length).
     // signature:     Base64-encoded Ed25519 signature over the signed payload
-    //                (sender_id ‖ recipient_id ‖ seq_no ‖ ciphertext ‖ nonce ‖ enc).
+    //                (sender_id ‖ recipient_id ‖ seq_no ‖ ciphertext ‖ nonce).
     // seq_no:        Monotonically increasing per-recipient sequence number.
     //                The client checks this for replay protection; the server
     //                enforces (recipient_id, nonce) uniqueness as a belt-and-braces
@@ -93,7 +90,6 @@ async function init() {
       message_id CHAR(36) PRIMARY KEY,
       sender_id CHAR(36) NOT NULL,
       recipient_id CHAR(36) NOT NULL,
-      enc VARCHAR(64) NOT NULL,
       ciphertext TEXT NOT NULL,
       nonce CHAR(16) NOT NULL,
       signature TEXT NOT NULL,
@@ -110,18 +106,22 @@ async function init() {
       INDEX idx_chain_status (chain_status, created_at)
     )`,
 
-    // Re-encrypted forwarded messages. The forwarder decrypts the original,
-    // then re-encrypts under the new recipient's X25519 key with a fresh
-    // HPKE encapsulation — so enc and nonce are per-share, not copied from
-    // the original message.
+    // Re-encrypted forwarded messages. A forward is a direct message where the
+    // forwarder is the sender: the forwarder re-encrypts the plaintext under the
+    // new recipient's pinned X25519 key with a fresh nonce, Ed25519-signs it, and
+    // draws seq_no from the same per-recipient send counter as direct messages
+    // (replay protection). There is no encapsulated key — the protocol is static
+    // ECDH, identical to the messages table.
     `CREATE TABLE IF NOT EXISTS message_shares (
       id CHAR(36) PRIMARY KEY,
       message_id CHAR(36) NOT NULL,
       shared_by_id CHAR(36) NOT NULL,
       shared_with_id CHAR(36) NOT NULL,
-      enc VARCHAR(64) NOT NULL,
       ciphertext TEXT NOT NULL,
       nonce CHAR(16) NOT NULL,
+      signature TEXT NOT NULL,
+      seq_no BIGINT UNSIGNED NOT NULL,
+      digest_hash CHAR(66) NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       revoked_at DATETIME NULL,
       FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE CASCADE,
@@ -203,16 +203,13 @@ async function init() {
     if (err.code !== 'ER_DUP_FIELDNAME') throw err;
   }
 
-  // enc (HPKE encapsulated key)
+  // enc removed — static ECDH replaced per-message ephemeral keys, so there is
+  // no encapsulated key to store on the message row anymore.
   try {
-    await pool.execute(
-      `ALTER TABLE messages
-         ADD COLUMN enc VARCHAR(64) NOT NULL DEFAULT ''
-         AFTER recipient_id`
-    );
-    console.log('Added messages.enc');
+    await pool.execute('ALTER TABLE messages DROP COLUMN enc');
+    console.log('Dropped messages.enc');
   } catch (err) {
-    if (err.code !== 'ER_DUP_FIELDNAME') throw err;
+    if (err.code !== 'ER_CANT_DROP_FIELD_OR_KEY') throw err;
   }
 
   // signature (Ed25519)
@@ -285,14 +282,47 @@ async function init() {
 
   // --- message_shares migrations ---
 
-  // enc for re-encrypted shares
+  // enc removed — static ECDH replaced per-share ephemeral keys, so there is
+  // no encapsulated key to store on the share row anymore.
+  try {
+    await pool.execute('ALTER TABLE message_shares DROP COLUMN enc');
+    console.log('Dropped message_shares.enc');
+  } catch (err) {
+    if (err.code !== 'ER_CANT_DROP_FIELD_OR_KEY') throw err;
+  }
+
+  // signature (Ed25519) — forwards are signed exactly like direct messages.
   try {
     await pool.execute(
       `ALTER TABLE message_shares
-         ADD COLUMN enc VARCHAR(64) NOT NULL DEFAULT ''
-         AFTER shared_with_id`
+         ADD COLUMN signature TEXT NOT NULL
+         AFTER nonce`
     );
-    console.log('Added message_shares.enc');
+    console.log('Added message_shares.signature');
+  } catch (err) {
+    if (err.code !== 'ER_DUP_FIELDNAME') throw err;
+  }
+
+  // seq_no (replay protection sequence number, from the forwarder's counter)
+  try {
+    await pool.execute(
+      `ALTER TABLE message_shares
+         ADD COLUMN seq_no BIGINT UNSIGNED NOT NULL DEFAULT 0
+         AFTER signature`
+    );
+    console.log('Added message_shares.seq_no');
+  } catch (err) {
+    if (err.code !== 'ER_DUP_FIELDNAME') throw err;
+  }
+
+  // digest_hash
+  try {
+    await pool.execute(
+      `ALTER TABLE message_shares
+         ADD COLUMN digest_hash CHAR(66) NOT NULL DEFAULT ''
+         AFTER seq_no`
+    );
+    console.log('Added message_shares.digest_hash');
   } catch (err) {
     if (err.code !== 'ER_DUP_FIELDNAME') throw err;
   }

@@ -83,7 +83,7 @@ describe('End-to-end flows', () => {
   });
 
   describe('Cross-cutting security invariants', () => {
-    test.todo('server-side message rows never contain plaintext — only enc/ciphertext/nonce/signature/digest');
+    test.todo('server-side message rows never contain plaintext — only ciphertext/nonce/signature/digest');
     test.todo('password_hash is never returned by any service method (register, login, getUserProfile)');
     test.todo('changing Alice\'s password does not affect Bob\'s outstanding tokens (per-user JWT invalidation)');
     test.todo('blockchain write failure on send does not roll back the message — the row is delivered with chain_status="failed"');
