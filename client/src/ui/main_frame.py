@@ -1,117 +1,15 @@
+import copy
+import datetime
 import os
-import base64
 import threading
 import requests
 import customtkinter as ctk
 from tkinter import messagebox, filedialog
 
 from config import BASE_URL, VERIFY_SSL
-
-DEV_MODE_TOKEN = "dev-token"
-
-# --- Demo data for navigating the GUI without a backend ---
-
-_DEMO_CONVERSATIONS = {
-    "user-alice-id": {
-        "name": "alice",
-        "key_warning": False,
-        "messages": [
-            {
-                "messageId": "msg-001", "sender_id": "user-alice-id",
-                "sender_username": "alice", "recipient_id": "dev-user-id",
-                "recipient_username": "test", "_mine": False,
-                "plaintext": "Hey, are you free to chat?",
-                "created_at": "2025-05-20 09:15", "chain_status": "recorded",
-            },
-            {
-                "messageId": "msg-002", "sender_id": "dev-user-id",
-                "sender_username": "test", "recipient_id": "user-alice-id",
-                "recipient_username": "alice", "_mine": True,
-                "plaintext": "Yeah! What's up?",
-                "created_at": "2025-05-20 09:17", "chain_status": "recorded",
-            },
-            {
-                "messageId": "msg-003", "sender_id": "user-alice-id",
-                "sender_username": "alice", "recipient_id": "dev-user-id",
-                "recipient_username": "test", "_mine": False,
-                "plaintext": "Wanted to share the project notes with you. Check your downloads.",
-                "created_at": "2025-05-20 09:20", "chain_status": "pending",
-                "_forwarded_to": [
-                    {"username": "carol", "user_id": "user-carol-id",
-                     "forwarded_at": "2025-05-20 09:25"},
-                ],
-            },
-        ],
-    },
-    "user-bob-id": {
-        "name": "bob",
-        "key_warning": True,
-        "messages": [
-            {
-                "messageId": "msg-004", "sender_id": "dev-user-id",
-                "sender_username": "test", "recipient_id": "user-bob-id",
-                "recipient_username": "bob", "_mine": True,
-                "plaintext": "Meeting at 3pm tomorrow?",
-                "created_at": "2025-05-19 14:00", "chain_status": "recorded",
-            },
-            {
-                "messageId": "msg-005", "sender_id": "user-bob-id",
-                "sender_username": "bob", "recipient_id": "dev-user-id",
-                "recipient_username": "test", "_mine": False,
-                "plaintext": "Works for me. I'll send the agenda.",
-                "created_at": "2025-05-19 14:05", "chain_status": "recorded",
-            },
-        ],
-    },
-    "user-carol-id": {
-        "name": "carol",
-        "key_warning": False,
-        "messages": [
-            {
-                "messageId": "msg-006", "sender_id": "user-carol-id",
-                "sender_username": "carol", "recipient_id": "dev-user-id",
-                "recipient_username": "test", "_mine": False,
-                "plaintext": None,
-                "created_at": "2025-05-21 11:00", "chain_status": "pending",
-            },
-        ],
-    },
-}
-
-
-def _dummy_msg_fields():
-    b64 = lambda b: base64.b64encode(b).decode()
-    return {
-        "enc": b64(os.urandom(32)),
-        "ciphertext": b64(os.urandom(64)),
-        "nonce": b64(os.urandom(12)),
-        "signature": b64(os.urandom(64)),
-        "seqNo": 0,
-        "digest": "0x" + "00" * 32,
-    }
-
-
-def _format_time(raw, short=False):
-    """Format '2025-05-20 09:15' into shorter forms."""
-    if not raw:
-        return ""
-    try:
-        from datetime import datetime, date
-        dt = datetime.strptime(raw, "%Y-%m-%d %H:%M")
-        today = date.today()
-        hour = dt.strftime("%I:%M %p").lstrip("0")
-        if dt.date() == today:
-            return hour
-        elif dt.year == today.year:
-            day = str(dt.day)
-            if short:
-                return f"{dt.strftime('%b')} {day}"
-            return f"{dt.strftime('%b')} {day}, {hour}"
-        else:
-            day = str(dt.day)
-            return f"{dt.strftime('%b')} {day} {dt.year}"
-    except (ValueError, TypeError):
-        return raw
+from constants import DEV_MODE_TOKEN, MIN_PASSWORD_LENGTH, POLL_INTERVAL_MS, PREVIEW_MAX_CHARS, NOW_FMT
+from ui.utils import _write_cache, _run_store_binary, _dummy_msg_fields, _format_time
+from ui.demo_data import DEMO_CONVERSATIONS
 
 
 class MainFrame(ctk.CTkFrame):
@@ -123,29 +21,33 @@ class MainFrame(ctk.CTkFrame):
         self._selected_msg = None
         self._plaintext_cache = {}
         self._dev = app.token == DEV_MODE_TOKEN
+        self._alive = True  # set False on logout to stop the poll loop
 
         # ── Left sidebar ──
         sidebar = ctk.CTkFrame(self, width=280, corner_radius=0,
-                               fg_color=("#0d0d0d", "#0d0d0d"))
+                               fg_color=("#000000", "#000000"))
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
-        # Sidebar / chat divider
-        divider = ctk.CTkFrame(self, width=1, fg_color=("#333333", "#333333"),
+        # Sidebar / chat divider — white stripe
+        divider = ctk.CTkFrame(self, width=2, fg_color=("#ffffff", "#ffffff"),
                                corner_radius=0)
         divider.pack(side="left", fill="y")
 
         ctk.CTkLabel(sidebar, text="Zebra",
-                     font=ctk.CTkFont(size=22, weight="bold")).pack(
+                     font=ctk.CTkFont(size=22, weight="bold"),
+                     text_color="#ffffff").pack(
                          pady=(18, 2), padx=16, anchor="w")
         ctk.CTkLabel(sidebar, text="Secure Messenger",
-                     font=ctk.CTkFont(size=11), text_color="#666").pack(
+                     font=ctk.CTkFont(size=11), text_color="#888888").pack(
                          padx=16, anchor="w")
         ctk.CTkLabel(sidebar, text=f"Logged in as {app.username}",
-                     font=ctk.CTkFont(size=12), text_color="#888").pack(
+                     font=ctk.CTkFont(size=12), text_color="#aaaaaa").pack(
                          padx=16, anchor="w", pady=(2, 0))
 
         ctk.CTkButton(sidebar, text="+ New Chat", height=36,
+                      fg_color="#ffffff", hover_color="#e0e0e0",
+                      text_color="#000000",
                       command=self._new_chat).pack(padx=14, pady=(16, 4), fill="x")
 
         # Search / filter
@@ -158,24 +60,24 @@ class MainFrame(ctk.CTkFrame):
         self._conv_list.pack(fill="both", expand=True, padx=4)
 
         # Bottom sidebar section
-        bottom = ctk.CTkFrame(sidebar, fg_color=("#151515", "#151515"),
+        bottom = ctk.CTkFrame(sidebar, fg_color=("#000000", "#000000"),
                               corner_radius=0)
         bottom.pack(fill="x", side="bottom")
 
-        # Thin top border for bottom section
-        ctk.CTkFrame(bottom, height=1, fg_color=("#333333", "#333333"),
+        # Thin top border for bottom section — white stripe
+        ctk.CTkFrame(bottom, height=1, fg_color=("#ffffff", "#ffffff"),
                      corner_radius=0).pack(fill="x")
-
 
         btn_row = ctk.CTkFrame(bottom, fg_color="transparent")
         btn_row.pack(fill="x", padx=14, pady=(10, 12))
         ctk.CTkButton(btn_row, text="Account", height=30, width=115,
-                      fg_color="#1e1e1e", hover_color="#2a2a2a",
+                      fg_color="#1a1a1a", hover_color="#333333",
+                      text_color="#ffffff", border_width=1, border_color="#444444",
                       command=self._show_account).pack(
                           side="left", expand=True, padx=(0, 4))
         ctk.CTkButton(btn_row, text="Logout", height=30, width=115,
-                      fg_color="#1e1e1e", hover_color="#2a2a2a",
-                      text_color="#ef4444",
+                      fg_color="#1a1a1a", hover_color="#333333",
+                      text_color="#ef4444", border_width=1, border_color="#444444",
                       command=self._logout).pack(
                           side="right", expand=True, padx=(4, 0))
 
@@ -185,21 +87,23 @@ class MainFrame(ctk.CTkFrame):
 
         # Header
         self._header = ctk.CTkFrame(right, height=64, corner_radius=0,
-                                    fg_color=("#141414", "#141414"))
+                                    fg_color=("#000000", "#000000"))
         self._header.pack(fill="x")
         self._header.pack_propagate(False)
 
         self._peer_label = ctk.CTkLabel(
             self._header, text="Select a chat",
-            font=ctk.CTkFont(size=16, weight="bold"))
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="#ffffff")
         self._peer_label.pack(side="left", padx=18)
 
         ctk.CTkButton(self._header, text="Refresh", width=70, height=28,
-                      fg_color="#1e1e1e", hover_color="#2a2a2a",
+                      fg_color="#1a1a1a", hover_color="#333333",
+                      text_color="#ffffff", border_width=1, border_color="#444444",
                       command=self._load).pack(side="right", padx=14, pady=18)
 
-        # Header bottom border
-        ctk.CTkFrame(right, height=1, fg_color=("#333333", "#333333"),
+        # Header bottom border — white stripe
+        ctk.CTkFrame(right, height=2, fg_color=("#ffffff", "#ffffff"),
                      corner_radius=0).pack(fill="x")
 
         # Key warning banner (hidden by default)
@@ -218,21 +122,21 @@ class MainFrame(ctk.CTkFrame):
         # banner is packed/unpacked dynamically
 
         # Message area
-        self._msg_area = ctk.CTkScrollableFrame(right, fg_color=("#181818", "#181818"))
+        self._msg_area = ctk.CTkScrollableFrame(right, fg_color=("#0a0a0a", "#0a0a0a"))
         self._msg_area.pack(fill="both", expand=True)
 
         # Empty state
         self._empty_label = ctk.CTkLabel(
             self._msg_area,
             text="Select a conversation to start messaging",
-            text_color="#555", font=ctk.CTkFont(size=14))
+            text_color="#555555", font=ctk.CTkFont(size=14))
         self._empty_label.pack(expand=True, pady=100)
 
         # Input bar
-        ctk.CTkFrame(right, height=1, fg_color=("#333333", "#333333"),
+        ctk.CTkFrame(right, height=2, fg_color=("#ffffff", "#ffffff"),
                      corner_radius=0).pack(fill="x", side="bottom")
         input_bar = ctk.CTkFrame(right, height=64, corner_radius=0,
-                                 fg_color=("#141414", "#141414"))
+                                 fg_color=("#000000", "#000000"))
         input_bar.pack(fill="x", side="bottom")
         input_bar.pack_propagate(False)
 
@@ -243,9 +147,12 @@ class MainFrame(ctk.CTkFrame):
                              padx=(14, 8), pady=12)
         self._msg_input.bind("<Return>", lambda e: self._send())
         ctk.CTkButton(input_bar, text="Send", width=80, height=40,
+                      fg_color="#ffffff", hover_color="#e0e0e0",
+                      text_color="#000000",
                       command=self._send).pack(side="right", padx=(0, 14), pady=12)
 
         self._load()
+        self._schedule_poll()
 
     # ── Data loading ──
 
@@ -256,27 +163,71 @@ class MainFrame(ctk.CTkFrame):
         headers = {"Authorization": f"Bearer {self.app.token}"}
         def run():
             try:
-                inbox = requests.get(f"{BASE_URL}/api/messages/inbox",
-                                     headers=headers, verify=VERIFY_SSL
-                                     ).json().get("data", [])
-                sent = requests.get(f"{BASE_URL}/api/messages/sent",
-                                    headers=headers, verify=VERIFY_SSL
-                                    ).json().get("data", [])
-                self.app.after(0, lambda: self._populate(inbox, sent))
+                r_inbox = requests.get(f"{BASE_URL}/api/messages/inbox",
+                                       headers=headers, verify=VERIFY_SSL)
+                r_inbox.raise_for_status()
+                r_sent = requests.get(f"{BASE_URL}/api/messages/sent",
+                                      headers=headers, verify=VERIFY_SSL)
+                r_sent.raise_for_status()
+                inbox = r_inbox.json().get("data", [])
+                sent  = r_sent.json().get("data", [])
+                _write_cache(inbox, sent)
+                _run_store_binary()
+                if self._alive:
+                    self.app.after(0, lambda i=inbox, s=sent: self._alive and self._populate(i, s))
+            except requests.exceptions.ConnectionError:
+                self.app.after(0, lambda: self._alive and self._show_load_error(
+                    "Cannot reach server — is the backend running?"))
             except Exception as e:
-                print(f"Load error: {e}")
+                self.app.after(0, lambda m=str(e): self._alive and self._show_load_error(m))
         threading.Thread(target=run, daemon=True).start()
 
+    def _show_load_error(self, msg):
+        for w in self._conv_list.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(self._conv_list, text=f"Load failed:\n{msg}",
+                     text_color="#ef4444", font=ctk.CTkFont(size=11),
+                     wraplength=220, justify="center").pack(pady=20)
+
+    def _schedule_poll(self):
+        if not self._alive:
+            return
+        if not self._dev:
+            self._load()
+        self.app.after(POLL_INTERVAL_MS, self._schedule_poll)
+
     def _populate_dev(self):
-        import copy
-        self._conversations = copy.deepcopy(_DEMO_CONVERSATIONS)
+        self._conversations = copy.deepcopy(DEMO_CONVERSATIONS)
         self._rebuild_conv_list()
         if self._active_peer and self._active_peer in self._conversations:
             self._open_chat(self._active_peer)
 
     def _populate(self, inbox, sent):
+        def _norm(m):
+            # Backend sends camelCase; normalise to snake_case for the UI.
+            for camel, snake in (
+                ("senderId", "sender_id"),
+                ("recipientId", "recipient_id"),
+                ("senderUsername", "sender_username"),
+                ("recipientUsername", "recipient_username"),
+                ("createdAt", "created_at"),
+                ("chainStatus", "chain_status"),
+            ):
+                if camel in m and snake not in m:
+                    m[snake] = m.pop(camel)
+            # Until crypto is implemented, ciphertext holds the plaintext.
+            if not m.get("plaintext") and m.get("ciphertext"):
+                m["plaintext"] = m["ciphertext"]
+            return m
+
+        # Remember active peer state before wiping so we can restore it if the
+        # backend doesn't return it yet (e.g. new chat opened, no messages sent).
+        prev_active = self._conversations.get(self._active_peer) if self._active_peer else None
+        prev_msg_count = len(prev_active["messages"]) if prev_active else 0
+
         self._conversations = {}
         for m in inbox:
+            _norm(m)
             m["_mine"] = False
             peer_id = m.get("sender_id", "")
             peer_name = m.get("sender_username") or peer_id
@@ -285,6 +236,7 @@ class MainFrame(ctk.CTkFrame):
                     "name": peer_name, "messages": [], "key_warning": False}
             self._conversations[peer_id]["messages"].append(m)
         for m in sent:
+            _norm(m)
             m["_mine"] = True
             peer_id = m.get("recipient_id", "")
             peer_name = m.get("recipient_username") or peer_id
@@ -294,9 +246,19 @@ class MainFrame(ctk.CTkFrame):
             self._conversations[peer_id]["messages"].append(m)
         for data in self._conversations.values():
             data["messages"].sort(key=lambda m: m.get("created_at", ""))
+
+        # Restore active peer if the backend doesn't have them yet
+        # (newly opened chat with no messages, or race with a just-sent message).
+        if self._active_peer and self._active_peer not in self._conversations and prev_active:
+            self._conversations[self._active_peer] = prev_active
+
         self._rebuild_conv_list()
+
         if self._active_peer and self._active_peer in self._conversations:
-            self._open_chat(self._active_peer)
+            new_msg_count = len(self._conversations[self._active_peer]["messages"])
+            if new_msg_count != prev_msg_count:
+                # Only redraw the message area when something actually changed.
+                self._open_chat(self._active_peer)
 
     def _rebuild_conv_list(self):
         for w in self._conv_list.winfo_children():
@@ -322,8 +284,8 @@ class MainFrame(ctk.CTkFrame):
         key_warning = data.get("key_warning", False)
         is_active = peer_id == self._active_peer
 
-        fg = ("#222222", "#222222") if is_active else ("#141414", "#141414")
-        border_col = "#2563eb" if is_active else "#2a2a2a"
+        fg = ("#1a1a1a", "#1a1a1a") if is_active else ("#000000", "#000000")
+        border_col = "#ffffff" if is_active else "#333333"
 
         card = ctk.CTkFrame(self._conv_list, fg_color=fg, corner_radius=10,
                             border_width=2 if is_active else 1,
@@ -369,8 +331,8 @@ class MainFrame(ctk.CTkFrame):
         if messages:
             last = messages[-1]
             preview_text = last.get("plaintext") or "(encrypted)"
-            if len(preview_text) > 34:
-                preview_text = preview_text[:34] + "..."
+            if len(preview_text) > PREVIEW_MAX_CHARS:
+                preview_text = preview_text[:PREVIEW_MAX_CHARS] + "..."
             preview = f"You: {preview_text}" if last.get("_mine") else preview_text
             preview_label = ctk.CTkLabel(
                 inner, text=preview,
@@ -411,9 +373,9 @@ class MainFrame(ctk.CTkFrame):
 
     def _make_msg_bubble(self, m):
         mine = m.get("_mine", False)
-        bg = ("#1e3a5f", "#1e3a5f") if mine else ("#252525", "#252525")
-        text_col = "#ffffff"
-        time_col = "#7799bb" if mine else "#666666"
+        bg = ("#f0f0f0", "#f0f0f0") if mine else ("#1a1a1a", "#1a1a1a")
+        text_col = "#000000" if mine else "#ffffff"
+        time_col = "#666666" if mine else "#888888"
         side = "e" if mine else "w"
 
         # Outer wrapper for alignment
@@ -422,7 +384,7 @@ class MainFrame(ctk.CTkFrame):
 
         bubble = ctk.CTkFrame(wrapper, fg_color=bg, corner_radius=14,
                               border_width=1,
-                              border_color=("#2a4a6f", "#2a4a6f") if mine
+                              border_color=("#cccccc", "#cccccc") if mine
                               else ("#333333", "#333333"))
         bubble.pack(anchor=side, padx=4)
 
@@ -434,16 +396,17 @@ class MainFrame(ctk.CTkFrame):
                          wraplength=480, justify="left").pack(
                              anchor="w", padx=14, pady=(10, 0))
         else:
-            # Encrypted / undecrypted message
-            enc_frame = ctk.CTkFrame(bubble, fg_color=("#1a1a1a", "#1a1a1a"),
-                                     corner_radius=8)
+            enc_bg = ("#d8d8d8", "#d8d8d8") if mine else ("#111111", "#111111")
+            enc_frame = ctk.CTkFrame(bubble, fg_color=enc_bg, corner_radius=8)
             enc_frame.pack(padx=10, pady=(10, 0), fill="x")
             ctk.CTkLabel(enc_frame, text="Encrypted message",
                          font=ctk.CTkFont(size=12, weight="bold"),
-                         text_color="#888").pack(padx=10, pady=(6, 2), anchor="w")
+                         text_color="#555555" if mine else "#888888").pack(
+                             padx=10, pady=(6, 2), anchor="w")
             ctk.CTkLabel(enc_frame, text="Decryption key required to view",
                          font=ctk.CTkFont(size=10),
-                         text_color="#555").pack(padx=10, pady=(0, 6), anchor="w")
+                         text_color="#777777" if mine else "#555555").pack(
+                             padx=10, pady=(0, 6), anchor="w")
 
         # Footer: timestamp + persistent actions toggle
         footer = ctk.CTkFrame(bubble, fg_color="transparent")
@@ -457,9 +420,11 @@ class MainFrame(ctk.CTkFrame):
         # clicking ⋯ again or anywhere on the bubble
         action_btns = ctk.CTkFrame(bubble, fg_color="transparent")
 
+        hover = ("#dddddd", "#dddddd") if mine else ("#333333", "#333333")
+        border = "#aaaaaa" if mine else "#3a3a3a"
         btn_kw = dict(height=24, font=ctk.CTkFont(size=11),
                       fg_color="transparent", border_width=1,
-                      border_color="#3a3a3a", hover_color=("#333333", "#333333"))
+                      border_color=border, hover_color=hover)
 
         self._build_action_buttons(action_btns, m, mine, btn_kw)
 
@@ -515,8 +480,7 @@ class MainFrame(ctk.CTkFrame):
         self._msg_input.delete(0, "end")
 
         if self._dev:
-            import datetime
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            now = datetime.datetime.now().strftime(NOW_FMT)
             msg = {
                 "messageId": f"msg-dev-{os.urandom(4).hex()}",
                 "sender_id": "dev-user-id", "sender_username": "test",
@@ -529,8 +493,12 @@ class MainFrame(ctk.CTkFrame):
             self._open_chat(self._active_peer)
             return
 
+        # Capture peer info on the main thread before handing off to worker.
+        peer_id = self._active_peer
+        peer_name = self._conversations[peer_id]["name"]
+
         headers = {"Authorization": f"Bearer {self.app.token}"}
-        payload = {"recipientId": self._active_peer, **_dummy_msg_fields()}
+        payload = {"recipientId": peer_id, **_dummy_msg_fields(text)}
         def run():
             try:
                 resp = requests.post(f"{BASE_URL}/api/messages",
@@ -538,15 +506,35 @@ class MainFrame(ctk.CTkFrame):
                                      verify=VERIFY_SSL)
                 resp.raise_for_status()
                 msg_id = resp.json().get("data", {}).get("messageId")
+                now = datetime.datetime.now().strftime(NOW_FMT)
+                msg = {
+                    "messageId": msg_id,
+                    "sender_id": self.app.user_id,
+                    "sender_username": self.app.username,
+                    "recipient_id": peer_id,
+                    "recipient_username": peer_name,
+                    "_mine": True,
+                    "plaintext": text,
+                    "created_at": now,
+                    "chain_status": "pending",
+                }
                 if msg_id:
                     self._plaintext_cache[msg_id] = text
-                self.app.after(0, self._load)
+                self.app.after(0, lambda: self._on_send_success(msg))
             except requests.exceptions.HTTPError as e:
-                msg = e.response.json().get("error", {}).get("message", str(e))
-                self.app.after(0, lambda m=msg: messagebox.showerror("Send failed", m))
+                err = e.response.json().get("error", {}).get("message", str(e))
+                self.app.after(0, lambda m=err: messagebox.showerror("Send failed", m))
             except Exception as e:
                 self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
         threading.Thread(target=run, daemon=True).start()
+
+    def _on_send_success(self, msg):
+        peer_id = msg["recipient_id"]
+        if peer_id not in self._conversations:
+            self._conversations[peer_id] = {
+                "name": msg["recipient_username"], "messages": [], "key_warning": False}
+        self._conversations[peer_id]["messages"].append(msg)
+        self._open_chat(peer_id)
 
     def _forward_msg(self, m):
         dialog = ctk.CTkInputDialog(
@@ -559,13 +547,12 @@ class MainFrame(ctk.CTkFrame):
         recipient = recipient.strip()
 
         if self._dev:
-            import datetime
             if "_forwarded_to" not in m:
                 m["_forwarded_to"] = []
             m["_forwarded_to"].append({
                 "username": recipient,
                 "user_id": f"user-{recipient}-id",
-                "forwarded_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "forwarded_at": datetime.datetime.now().strftime(NOW_FMT),
             })
             messagebox.showinfo(
                 "Forwarded",
@@ -577,6 +564,7 @@ class MainFrame(ctk.CTkFrame):
 
         headers = {"Authorization": f"Bearer {self.app.token}"}
         msg_id = m.get("messageId")
+        fwd_fields = _dummy_msg_fields(m.get("plaintext") or "")
         def run():
             try:
                 resp = requests.get(f"{BASE_URL}/api/auth/user",
@@ -584,12 +572,11 @@ class MainFrame(ctk.CTkFrame):
                                     headers=headers, verify=VERIFY_SSL)
                 resp.raise_for_status()
                 rid = resp.json()["data"]["userId"]
-                fields = _dummy_msg_fields()
                 resp2 = requests.post(
                     f"{BASE_URL}/api/messages/{msg_id}/forward",
-                    json={"recipientId": rid, "enc": fields["enc"],
-                          "ciphertext": fields["ciphertext"],
-                          "nonce": fields["nonce"]},
+                    json={"recipientId": rid, "enc": fwd_fields["enc"],
+                          "ciphertext": fwd_fields["ciphertext"],
+                          "nonce": fwd_fields["nonce"]},
                     headers=headers, verify=VERIFY_SSL)
                 resp2.raise_for_status()
                 self.app.after(0, lambda: messagebox.showinfo(
@@ -1004,8 +991,8 @@ class MainFrame(ctk.CTkFrame):
             if not cur or not new:
                 status.configure(text="Both fields are required.", text_color="#ef4444")
                 return
-            if len(new) < 12:
-                status.configure(text="New password must be at least 12 characters.",
+            if len(new) < MIN_PASSWORD_LENGTH:
+                status.configure(text=f"New password must be at least {MIN_PASSWORD_LENGTH} characters.",
                                  text_color="#ef4444")
                 return
             if new != confirm:
@@ -1041,5 +1028,8 @@ class MainFrame(ctk.CTkFrame):
     # ── Logout ──
 
     def _logout(self):
+        self._alive = False
         self.app.token = None
+        self.app.user_id = None
+        self.app.username = None
         self.app._show_login()
