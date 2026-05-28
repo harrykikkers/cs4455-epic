@@ -5,6 +5,7 @@ import customtkinter as ctk
 from config import BASE_URL, VERIFY_SSL
 from constants import MIN_PASSWORD_LENGTH
 from crypto.kdf import derive_auth_hash
+from crypto.keystore import Keystore
 
 
 class RegisterFrame(ctk.CTkFrame):
@@ -102,6 +103,13 @@ class RegisterFrame(ctk.CTkFrame):
                     "password": derive_auth_hash(pw, user),
                 }, verify=VERIFY_SSL)
                 resp.raise_for_status()
+
+                self.app.after(0, lambda: self._show_progress("Generating keypairs..."))
+                ks = Keystore()
+                if ks.exists():
+                    import os; os.remove(ks.path)
+                ks.create(pw)
+                self.app.keystore = ks
 
                 self.app.after(0, lambda: self._show_progress(
                     "Account created! Redirecting to login..."))

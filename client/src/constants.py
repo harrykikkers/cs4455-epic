@@ -12,7 +12,7 @@ DEV_MODE_TOKEN = "dev-token"
 MIN_PASSWORD_LENGTH = 12
 
 # Message polling cadence (milliseconds)
-POLL_INTERVAL_MS = 2_000
+POLL_INTERVAL_MS = 10_000
 
 # Conversation list preview truncation
 PREVIEW_MAX_CHARS = 34

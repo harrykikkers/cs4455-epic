@@ -5,6 +5,7 @@ import customtkinter as ctk
 from config import BASE_URL, VERIFY_SSL
 from constants import DEV_MODE_TOKEN
 from crypto.kdf import derive_auth_hash
+from crypto.keystore import Keystore
 
 
 class LoginFrame(ctk.CTkFrame):
@@ -64,6 +65,23 @@ class LoginFrame(ctk.CTkFrame):
                 self.app.token    = data["token"]
                 self.app.user_id  = data["user"]["userId"]
                 self.app.username = data["user"]["username"]
+
+                # Unlock (or create) the local keystore and publish public keys.
+                ks = Keystore()
+                if not ks.exists():
+                    ks.create(pw)
+                else:
+                    ks.unlock(pw)
+                self.app.keystore = ks
+                hdrs = {"Authorization": f"Bearer {self.app.token}"}
+                pub = ks.public_keys()
+                for key_type in ("x25519", "ed25519"):
+                    requests.post(f"{BASE_URL}/api/keys", json={
+                        "publicKey": pub[key_type],
+                        "keyType": key_type,
+                        "acknowledgeRotation": True,
+                    }, headers=hdrs, verify=VERIFY_SSL)
+
                 self.app.after(0, self.app._show_main)
             except requests.exceptions.ConnectionError:
                 self.app.after(0, lambda: self.status.configure(

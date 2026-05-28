@@ -18,9 +18,10 @@ class App(ctk.CTk):
         self.title("Zebra")
         self.geometry("1050x700")
         self.minsize(900, 600)
-        self.token    = None
-        self.user_id  = None
-        self.username = None
+        self.token     = None
+        self.user_id   = None
+        self.username  = None
+        self.keystore  = None
         self._show_login()
 
     def _clear(self):

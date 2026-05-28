@@ -6,8 +6,15 @@ import requests
 import customtkinter as ctk
 from tkinter import messagebox, filedialog
 
+import base64
+
+from Crypto.Hash import keccak
+
 from config import BASE_URL, VERIFY_SSL
 from constants import DEV_MODE_TOKEN, MIN_PASSWORD_LENGTH, POLL_INTERVAL_MS, PREVIEW_MAX_CHARS, NOW_FMT
+from crypto.aead import decrypt as aead_decrypt, encrypt as aead_encrypt
+from crypto.hpke import decapsulate, encapsulate
+from crypto.signing import sign, verify as sig_verify
 from ui.utils import _write_cache, _run_store_binary, _dummy_msg_fields, _format_time
 from ui.demo_data import DEMO_CONVERSATIONS
 
@@ -215,9 +222,27 @@ class MainFrame(ctk.CTkFrame):
             ):
                 if camel in m and snake not in m:
                     m[snake] = m.pop(camel)
-            # Until crypto is implemented, ciphertext holds the plaintext.
+            # Decrypt received messages if keystore is unlocked.
             if not m.get("plaintext") and m.get("ciphertext"):
-                m["plaintext"] = m["ciphertext"]
+                if m.get("_mine"):
+                    msg_id = m.get("messageId")
+                    cached = self._plaintext_cache.get(msg_id) if msg_id else None
+                    m["plaintext"] = cached if cached else "[sent]"
+                else:
+                    ks = self.app.keystore
+                    if ks is not None:
+                        try:
+                            priv = ks.private_keys()
+                            enc = base64.b64decode(m["enc"])
+                            shared_secret = decapsulate(enc, priv["x25519"])
+                            nonce = base64.b64decode(m["nonce"])
+                            ct = base64.b64decode(m["ciphertext"])
+                            plaintext = aead_decrypt(shared_secret, nonce, ct, b"")
+                            m["plaintext"] = plaintext.decode()
+                        except Exception:
+                            m["plaintext"] = "[encrypted — cannot decrypt]"
+                    else:
+                        m["plaintext"] = m["ciphertext"]
             return m
 
         # Remember active peer state before wiping so we can restore it if the
@@ -227,8 +252,8 @@ class MainFrame(ctk.CTkFrame):
 
         self._conversations = {}
         for m in inbox:
-            _norm(m)
             m["_mine"] = False
+            _norm(m)
             peer_id = m.get("sender_id", "")
             peer_name = m.get("sender_username") or peer_id
             if peer_id not in self._conversations:
@@ -236,8 +261,8 @@ class MainFrame(ctk.CTkFrame):
                     "name": peer_name, "messages": [], "key_warning": False}
             self._conversations[peer_id]["messages"].append(m)
         for m in sent:
-            _norm(m)
             m["_mine"] = True
+            _norm(m)
             peer_id = m.get("recipient_id", "")
             peer_name = m.get("recipient_username") or peer_id
             if peer_id not in self._conversations:
@@ -498,9 +523,58 @@ class MainFrame(ctk.CTkFrame):
         peer_name = self._conversations[peer_id]["name"]
 
         headers = {"Authorization": f"Bearer {self.app.token}"}
-        payload = {"recipientId": peer_id, **_dummy_msg_fields(text)}
         def run():
             try:
+                payload = {"recipientId": peer_id}
+                ks = self.app.keystore
+                if ks is not None:
+                    # Fetch recipient public keys
+                    r = requests.get(f"{BASE_URL}/api/keys/{peer_id}",
+                                     headers=headers, verify=VERIFY_SSL)
+                    r.raise_for_status()
+                    peer_key_list = r.json().get("data", [])
+                    x_pub_b64 = next((k["publicKey"] for k in peer_key_list
+                                      if k["keyType"] == "x25519"), None)
+                    ed_pub_b64 = next((k["publicKey"] for k in peer_key_list
+                                       if k["keyType"] == "ed25519"), None)
+                    if not x_pub_b64:
+                        raise RuntimeError("Recipient has no X25519 key on server.")
+
+                    # TOFU pinning
+                    pinned = ks.pinned_peer_key(peer_id, "x25519")
+                    if pinned is None:
+                        ks.pin_peer_key(peer_id, "x25519", x_pub_b64)
+                    elif pinned != x_pub_b64:
+                        self.app.after(0, lambda: self._conversations
+                                       .get(peer_id, {}).update({"key_warning": True}))
+
+                    # HPKE encapsulate → shared secret
+                    x_pub = base64.b64decode(x_pub_b64)
+                    enc, shared_secret = encapsulate(x_pub)
+
+                    # AES-256-GCM encrypt
+                    nonce, ciphertext = aead_encrypt(shared_secret, text.encode(), b"")
+
+                    # Ed25519 sign the ciphertext
+                    priv = ks.private_keys()
+                    signature = sign(ciphertext, priv["ed25519"])
+
+                    # keccak256 digest of plaintext
+                    k = keccak.new(digest_bits=256)
+                    k.update(text.encode())
+                    digest = "0x" + k.hexdigest()
+
+                    payload.update({
+                        "enc":        base64.b64encode(enc).decode(),
+                        "ciphertext": base64.b64encode(ciphertext).decode(),
+                        "nonce":      base64.b64encode(nonce).decode(),
+                        "signature":  base64.b64encode(signature).decode(),
+                        "seqNo":      0,
+                        "digest":     digest,
+                    })
+                else:
+                    payload.update(_dummy_msg_fields(text))
+
                 resp = requests.post(f"{BASE_URL}/api/messages",
                                      json=payload, headers=headers,
                                      verify=VERIFY_SSL)
@@ -564,7 +638,7 @@ class MainFrame(ctk.CTkFrame):
 
         headers = {"Authorization": f"Bearer {self.app.token}"}
         msg_id = m.get("messageId")
-        fwd_fields = _dummy_msg_fields(m.get("plaintext") or "")
+        plaintext = m.get("plaintext") or ""
         def run():
             try:
                 resp = requests.get(f"{BASE_URL}/api/auth/user",
@@ -572,11 +646,30 @@ class MainFrame(ctk.CTkFrame):
                                     headers=headers, verify=VERIFY_SSL)
                 resp.raise_for_status()
                 rid = resp.json()["data"]["userId"]
+
+                ks = self.app.keystore
+                if ks is not None and plaintext:
+                    r = requests.get(f"{BASE_URL}/api/keys/{rid}",
+                                     headers=headers, verify=VERIFY_SSL)
+                    r.raise_for_status()
+                    peer_key_list = r.json().get("data", [])
+                    x_pub_b64 = next((k["publicKey"] for k in peer_key_list
+                                      if k["keyType"] == "x25519"), None)
+                    if not x_pub_b64:
+                        raise RuntimeError("Recipient has no X25519 key on server.")
+                    enc, shared_secret = encapsulate(base64.b64decode(x_pub_b64))
+                    nonce, ciphertext = aead_encrypt(shared_secret, plaintext.encode(), b"")
+                    fwd = {
+                        "enc":        base64.b64encode(enc).decode(),
+                        "ciphertext": base64.b64encode(ciphertext).decode(),
+                        "nonce":      base64.b64encode(nonce).decode(),
+                    }
+                else:
+                    fwd = _dummy_msg_fields(plaintext)
+
                 resp2 = requests.post(
                     f"{BASE_URL}/api/messages/{msg_id}/forward",
-                    json={"recipientId": rid, "enc": fwd_fields["enc"],
-                          "ciphertext": fwd_fields["ciphertext"],
-                          "nonce": fwd_fields["nonce"]},
+                    json={"recipientId": rid, **fwd},
                     headers=headers, verify=VERIFY_SSL)
                 resp2.raise_for_status()
                 self.app.after(0, lambda: messagebox.showinfo(
@@ -928,6 +1021,9 @@ class MainFrame(ctk.CTkFrame):
                 if e.response.status_code == 404:
                     self.app.after(0, lambda: messagebox.showerror(
                         "Not found", f'No user "{username}" exists.'))
+                elif e.response.status_code == 429:
+                    self.app.after(0, lambda: messagebox.showerror(
+                        "Rate limited", "Too many requests — wait a moment and try again."))
                 else:
                     self.app.after(0, lambda: messagebox.showerror("Error", str(e)))
             except Exception as e:
