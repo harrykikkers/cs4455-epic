@@ -18,10 +18,21 @@ _CACHE_FILE   = pathlib.Path.home() / ".zebra" / "messages.json"
 
 
 def _write_cache(inbox: list, sent: list) -> None:
-    """Persist fetched messages to the local JSON cache for the C++ store."""
+    """Persist message METADATA to the local JSON cache for the C++ store.
+
+    Decrypted ``plaintext`` and internal UI flags (``_mine``, ``_key_warning``,
+    ``_forwarded_to`` …) are stripped before writing: the indexer only needs the
+    ciphertext envelope (ids, ciphertext, nonce, timestamps), and cleartext must
+    never be persisted here. Durable plaintext lives solely in the KEK-encrypted
+    message cache owned by the keystore.
+    """
+    def _sanitize(m: dict) -> dict:
+        return {k: v for k, v in m.items()
+                if k != "plaintext" and not k.startswith("_")}
     try:
         _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _CACHE_FILE.write_text(json.dumps(inbox + sent, default=str))
+        payload = [_sanitize(m) for m in (inbox + sent)]
+        _CACHE_FILE.write_text(json.dumps(payload, default=str))
     except Exception as e:
         print(f"[cache] write error: {e}")
 

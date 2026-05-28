@@ -8,14 +8,10 @@ from tkinter import messagebox, filedialog
 
 import base64
 
-from Crypto.Hash import keccak
-
 from config import BASE_URL, VERIFY_SSL
 from constants import DEV_MODE_TOKEN, MIN_PASSWORD_LENGTH, POLL_INTERVAL_MS, PREVIEW_MAX_CHARS, NOW_FMT
-from crypto.aead import decrypt as aead_decrypt, encrypt as aead_encrypt
-from crypto.hpke import decapsulate, encapsulate
-from crypto.signing import sign, verify as sig_verify
-from ui.utils import _write_cache, _run_store_binary, _dummy_msg_fields, _format_time
+from crypto.kdf import derive_auth_hash
+from ui.utils import _write_cache, _run_store_binary, _format_time
 from ui.demo_data import DEMO_CONVERSATIONS
 
 
@@ -26,7 +22,16 @@ class MainFrame(ctk.CTkFrame):
         self._conversations = {}
         self._active_peer = None
         self._selected_msg = None
+        # Seed the plaintext cache from the KEK-encrypted store so messages read
+        # in a previous session display immediately after a restart, instead of
+        # being re-decrypted live (which the persistent replay counter rejects).
         self._plaintext_cache = {}
+        _ks = getattr(app, "keystore", None)
+        if _ks is not None:
+            try:
+                self._plaintext_cache = _ks.load_message_cache()
+            except Exception:
+                self._plaintext_cache = {}
         self._dev = app.token == DEV_MODE_TOKEN
         self._alive = True  # set False on logout to stop the poll loop
 
@@ -178,6 +183,7 @@ class MainFrame(ctk.CTkFrame):
                 r_sent.raise_for_status()
                 inbox = r_inbox.json().get("data", [])
                 sent  = r_sent.json().get("data", [])
+                self._decrypt_inbox(inbox, headers)
                 _write_cache(inbox, sent)
                 _run_store_binary()
                 if self._alive:
@@ -195,6 +201,37 @@ class MainFrame(ctk.CTkFrame):
         ctk.CTkLabel(self._conv_list, text=f"Load failed:\n{msg}",
                      text_color="#ef4444", font=ctk.CTkFont(size=11),
                      wraplength=220, justify="center").pack(pady=20)
+
+    def _fetch_and_pin(self, user_id, headers):
+        """Fetch a peer's public keys and reconcile against the TOFU pin.
+
+        Returns ``(result, changed)`` where ``result`` is a dict possibly
+        containing "x25519"/"ed25519" base64 strings (the key to USE for crypto)
+        and ``changed`` is True if any pinned key differs from the server's
+        current key. On a difference we keep the PINNED key (secure TOFU) and do
+        not auto-trust the new server key. Runs in a worker thread.
+        """
+        ks = self.app.keystore
+        resp = requests.get(f"{BASE_URL}/api/keys/{user_id}",
+                            headers=headers, verify=VERIFY_SSL)
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        result = {}
+        changed = False
+        for kt in ("x25519", "ed25519"):
+            pub = next((k["publicKey"] for k in data if k["keyType"] == kt), None)
+            if pub is None:
+                continue
+            pinned = ks.pinned_peer_key(user_id, kt)
+            if pinned is None:
+                ks.pin_peer_key(user_id, kt, pub)
+                result[kt] = pub
+            elif pinned != pub:
+                changed = True
+                result[kt] = pinned
+            else:
+                result[kt] = pinned
+        return result, changed
 
     def _schedule_poll(self):
         if not self._alive:
@@ -222,27 +259,6 @@ class MainFrame(ctk.CTkFrame):
             ):
                 if camel in m and snake not in m:
                     m[snake] = m.pop(camel)
-            # Decrypt received messages if keystore is unlocked.
-            if not m.get("plaintext") and m.get("ciphertext"):
-                if m.get("_mine"):
-                    msg_id = m.get("messageId")
-                    cached = self._plaintext_cache.get(msg_id) if msg_id else None
-                    m["plaintext"] = cached if cached else "[sent]"
-                else:
-                    ks = self.app.keystore
-                    if ks is not None:
-                        try:
-                            priv = ks.private_keys()
-                            enc = base64.b64decode(m["enc"])
-                            shared_secret = decapsulate(enc, priv["x25519"])
-                            nonce = base64.b64decode(m["nonce"])
-                            ct = base64.b64decode(m["ciphertext"])
-                            plaintext = aead_decrypt(shared_secret, nonce, ct, b"")
-                            m["plaintext"] = plaintext.decode()
-                        except Exception:
-                            m["plaintext"] = "[encrypted — cannot decrypt]"
-                    else:
-                        m["plaintext"] = m["ciphertext"]
             return m
 
         # Remember active peer state before wiping so we can restore it if the
@@ -254,6 +270,7 @@ class MainFrame(ctk.CTkFrame):
         for m in inbox:
             m["_mine"] = False
             _norm(m)
+            # Inbox plaintext was already set by _decrypt_inbox in the worker.
             peer_id = m.get("sender_id", "")
             peer_name = m.get("sender_username") or peer_id
             if peer_id not in self._conversations:
@@ -263,6 +280,10 @@ class MainFrame(ctk.CTkFrame):
         for m in sent:
             m["_mine"] = True
             _norm(m)
+            if not m.get("plaintext"):
+                msg_id = m.get("messageId")
+                cached = self._plaintext_cache.get(msg_id) if msg_id else None
+                m["plaintext"] = cached if cached else "[sent]"
             peer_id = m.get("recipient_id", "")
             peer_name = m.get("recipient_username") or peer_id
             if peer_id not in self._conversations:
@@ -271,6 +292,9 @@ class MainFrame(ctk.CTkFrame):
             self._conversations[peer_id]["messages"].append(m)
         for data in self._conversations.values():
             data["messages"].sort(key=lambda m: m.get("created_at", ""))
+            # Propagate per-message key warnings to the conversation.
+            if any(m.get("_key_warning") for m in data["messages"]):
+                data["key_warning"] = True
 
         # Restore active peer if the backend doesn't have them yet
         # (newly opened chat with no messages, or race with a just-sent message).
@@ -284,6 +308,85 @@ class MainFrame(ctk.CTkFrame):
             if new_msg_count != prev_msg_count:
                 # Only redraw the message area when something actually changed.
                 self._open_chat(self._active_peer)
+
+    def _decrypt_inbox(self, inbox, headers):
+        """Decrypt received messages in the worker thread (network + crypto).
+
+        Each message dict is mutated in place with ``plaintext`` (and possibly
+        ``_key_warning``). Messages are processed per-sender in ASCENDING seqNo
+        order: the inbox is sorted by created_at DESC, but the replay check is
+        strictly-increasing, so out-of-order application would falsely reject.
+        """
+        from crypto.messaging import open_message, SignatureError, ReplayError
+
+        ks = self.app.keystore
+        added = False  # whether any new plaintext was decrypted this pass
+
+        by_sender = {}
+        for m in inbox:
+            sender_id = m.get("senderId") or m.get("sender_id")
+            by_sender.setdefault(sender_id, []).append(m)
+
+        for sender_id, msgs in by_sender.items():
+            msgs.sort(key=lambda m: int(m.get("seqNo", m.get("seq_no", 0))))
+            for m in msgs:
+                message_id = m.get("messageId")
+                if message_id in self._plaintext_cache:
+                    # Already decrypted on a prior poll — reusing the cache also
+                    # avoids the replay check rejecting an already-seen message.
+                    m["plaintext"] = self._plaintext_cache[message_id]
+                    continue
+                if not m.get("ciphertext"):
+                    continue
+                if ks is None:
+                    m["plaintext"] = "[encrypted — keys locked]"
+                    continue
+                try:
+                    pinned, changed = self._fetch_and_pin(sender_id, headers)
+                except Exception:
+                    m["plaintext"] = "[encrypted — cannot fetch sender key]"
+                    continue
+                if changed:
+                    m["_key_warning"] = True
+                if "x25519" not in pinned or "ed25519" not in pinned:
+                    m["plaintext"] = "[encrypted — sender key missing]"
+                    continue
+                priv = ks.private_keys()
+                last_seq = ks.last_recv_seq(sender_id)
+                fields = {
+                    "ciphertext": m["ciphertext"],
+                    "nonce": m["nonce"],
+                    "signature": m["signature"],
+                    "seqNo": m.get("seqNo", m.get("seq_no")),
+                }
+                try:
+                    pt, seq = open_message(
+                        fields=fields,
+                        sender_id=sender_id,
+                        recipient_id=self.app.user_id,
+                        my_x_priv=priv["x25519"],
+                        peer_x_pub=base64.b64decode(pinned["x25519"]),
+                        peer_ed_pub=base64.b64decode(pinned["ed25519"]),
+                        last_seq=last_seq,
+                    )
+                    ks.set_recv_seq(sender_id, seq)
+                    m["plaintext"] = pt
+                    self._plaintext_cache[message_id] = pt
+                    added = True
+                except SignatureError:
+                    m["plaintext"] = "[unverified — signature check failed]"
+                except ReplayError:
+                    m["plaintext"] = "[replay detected — dropped]"
+                except Exception:
+                    m["plaintext"] = "[encrypted — cannot decrypt]"
+
+        # Persist the newly decrypted plaintext (encrypted under the KEK) so it
+        # survives a restart without a live re-decrypt the replay check rejects.
+        if added and ks is not None:
+            try:
+                ks.save_message_cache(self._plaintext_cache)
+            except Exception:
+                pass
 
     def _rebuild_conv_list(self):
         for w in self._conv_list.winfo_children():
@@ -524,57 +627,39 @@ class MainFrame(ctk.CTkFrame):
 
         headers = {"Authorization": f"Bearer {self.app.token}"}
         def run():
+            # Fail closed: without unlocked keys we cannot encrypt, and we must
+            # NEVER fall back to sending plaintext.
+            ks = self.app.keystore
+            if ks is None:
+                self.app.after(0, lambda: messagebox.showerror(
+                    "Cannot send",
+                    "Encryption keys are locked — please log in again."))
+                return
             try:
-                payload = {"recipientId": peer_id}
-                ks = self.app.keystore
-                if ks is not None:
-                    # Fetch recipient public keys
-                    r = requests.get(f"{BASE_URL}/api/keys/{peer_id}",
-                                     headers=headers, verify=VERIFY_SSL)
-                    r.raise_for_status()
-                    peer_key_list = r.json().get("data", [])
-                    x_pub_b64 = next((k["publicKey"] for k in peer_key_list
-                                      if k["keyType"] == "x25519"), None)
-                    ed_pub_b64 = next((k["publicKey"] for k in peer_key_list
-                                       if k["keyType"] == "ed25519"), None)
-                    if not x_pub_b64:
-                        raise RuntimeError("Recipient has no X25519 key on server.")
+                # Fetch + reconcile the recipient's keys (secure TOFU).
+                pinned, changed = self._fetch_and_pin(peer_id, headers)
+                if "x25519" not in pinned:
+                    raise RuntimeError("Recipient has no X25519 key on server.")
+                # ed25519 is only needed to verify their replies, not to send.
+                if changed:
+                    self.app.after(0, lambda: self._conversations
+                                   .get(peer_id, {}).update({"key_warning": True}))
 
-                    # TOFU pinning
-                    pinned = ks.pinned_peer_key(peer_id, "x25519")
-                    if pinned is None:
-                        ks.pin_peer_key(peer_id, "x25519", x_pub_b64)
-                    elif pinned != x_pub_b64:
-                        self.app.after(0, lambda: self._conversations
-                                       .get(peer_id, {}).update({"key_warning": True}))
+                priv = ks.private_keys()
+                seq_no = ks.next_send_seq(peer_id)
 
-                    # HPKE encapsulate → shared secret
-                    x_pub = base64.b64decode(x_pub_b64)
-                    enc, shared_secret = encapsulate(x_pub)
+                from crypto.messaging import seal
+                fields = seal(
+                    plaintext=text,
+                    sender_id=self.app.user_id,
+                    recipient_id=peer_id,
+                    seq_no=seq_no,
+                    my_x_priv=priv["x25519"],
+                    my_ed_priv=priv["ed25519"],
+                    peer_x_pub=base64.b64decode(pinned["x25519"]),
+                )
 
-                    # AES-256-GCM encrypt
-                    nonce, ciphertext = aead_encrypt(shared_secret, text.encode(), b"")
-
-                    # Ed25519 sign the ciphertext
-                    priv = ks.private_keys()
-                    signature = sign(ciphertext, priv["ed25519"])
-
-                    # keccak256 digest of plaintext
-                    k = keccak.new(digest_bits=256)
-                    k.update(text.encode())
-                    digest = "0x" + k.hexdigest()
-
-                    payload.update({
-                        "enc":        base64.b64encode(enc).decode(),
-                        "ciphertext": base64.b64encode(ciphertext).decode(),
-                        "nonce":      base64.b64encode(nonce).decode(),
-                        "signature":  base64.b64encode(signature).decode(),
-                        "seqNo":      0,
-                        "digest":     digest,
-                    })
-                else:
-                    payload.update(_dummy_msg_fields(text))
-
+                payload = {"recipientId": peer_id, **fields}
                 resp = requests.post(f"{BASE_URL}/api/messages",
                                      json=payload, headers=headers,
                                      verify=VERIFY_SSL)
@@ -594,6 +679,12 @@ class MainFrame(ctk.CTkFrame):
                 }
                 if msg_id:
                     self._plaintext_cache[msg_id] = text
+                    # Persist immediately so a sent message survives a restart
+                    # even if the app closes before the next inbox poll.
+                    try:
+                        ks.save_message_cache(self._plaintext_cache)
+                    except Exception:
+                        pass
                 self.app.after(0, lambda: self._on_send_success(msg))
             except requests.exceptions.HTTPError as e:
                 err = e.response.json().get("error", {}).get("message", str(e))
@@ -637,9 +728,28 @@ class MainFrame(ctk.CTkFrame):
             return
 
         headers = {"Authorization": f"Bearer {self.app.token}"}
-        msg_id = m.get("messageId")
-        plaintext = m.get("plaintext") or ""
+        # A forward is just "the forwarder sends the plaintext to a new
+        # recipient" under static ECDH, so it seals exactly like _send: a forward
+        # posts to the ORIGINAL message id (forwards create no chain entry).
+        orig_id = m.get("originalMessageId") or m.get("messageId")
+        plaintext = m.get("plaintext")
         def run():
+            # Fail closed: without unlocked keys we cannot seal, and we must
+            # NEVER fall back to plaintext or dummy fields.
+            ks = self.app.keystore
+            if ks is None:
+                self.app.after(0, lambda: messagebox.showerror(
+                    "Cannot forward",
+                    "Encryption keys are locked — please log in again."))
+                return
+            # A message we never decrypted (or a fail-closed placeholder) has no
+            # plaintext to re-seal. The placeholders are bracketed sentinels.
+            if not plaintext or plaintext.startswith("["):
+                self.app.after(0, lambda: messagebox.showerror(
+                    "Cannot forward",
+                    "Cannot forward — this message has not been "
+                    "decrypted on this device."))
+                return
             try:
                 resp = requests.get(f"{BASE_URL}/api/auth/user",
                                     params={"username": recipient},
@@ -647,29 +757,27 @@ class MainFrame(ctk.CTkFrame):
                 resp.raise_for_status()
                 rid = resp.json()["data"]["userId"]
 
-                ks = self.app.keystore
-                if ks is not None and plaintext:
-                    r = requests.get(f"{BASE_URL}/api/keys/{rid}",
-                                     headers=headers, verify=VERIFY_SSL)
-                    r.raise_for_status()
-                    peer_key_list = r.json().get("data", [])
-                    x_pub_b64 = next((k["publicKey"] for k in peer_key_list
-                                      if k["keyType"] == "x25519"), None)
-                    if not x_pub_b64:
-                        raise RuntimeError("Recipient has no X25519 key on server.")
-                    enc, shared_secret = encapsulate(base64.b64decode(x_pub_b64))
-                    nonce, ciphertext = aead_encrypt(shared_secret, plaintext.encode(), b"")
-                    fwd = {
-                        "enc":        base64.b64encode(enc).decode(),
-                        "ciphertext": base64.b64encode(ciphertext).decode(),
-                        "nonce":      base64.b64encode(nonce).decode(),
-                    }
-                else:
-                    fwd = _dummy_msg_fields(plaintext)
+                # Fetch + reconcile the recipient's keys (secure TOFU), then seal.
+                pinned, changed = self._fetch_and_pin(rid, headers)
+                if "x25519" not in pinned:
+                    raise RuntimeError("Recipient has no X25519 key on server.")
+                priv = ks.private_keys()
+                seq_no = ks.next_send_seq(rid)
+
+                from crypto.messaging import seal
+                fields = seal(
+                    plaintext=plaintext,
+                    sender_id=self.app.user_id,
+                    recipient_id=rid,
+                    seq_no=seq_no,
+                    my_x_priv=priv["x25519"],
+                    my_ed_priv=priv["ed25519"],
+                    peer_x_pub=base64.b64decode(pinned["x25519"]),
+                )
 
                 resp2 = requests.post(
-                    f"{BASE_URL}/api/messages/{msg_id}/forward",
-                    json={"recipientId": rid, **fwd},
+                    f"{BASE_URL}/api/messages/{orig_id}/forward",
+                    json={"recipientId": rid, **fields},
                     headers=headers, verify=VERIFY_SSL)
                 resp2.raise_for_status()
                 self.app.after(0, lambda: messagebox.showinfo(
@@ -885,7 +993,9 @@ class MainFrame(ctk.CTkFrame):
             messagebox.showerror("Error", str(e))
 
     def _view_chain(self, m):
-        msg_id = m.get("messageId", "?")
+        # Forwards create no chain entry, so a forwarded message's on-chain
+        # proof lives under the ORIGINAL message's id.
+        msg_id = m.get("originalMessageId") or m.get("messageId", "?")
         chain = m.get("chain_status", "unknown")
 
         if self._dev or chain in ("pending", "unknown"):
@@ -958,12 +1068,42 @@ class MainFrame(ctk.CTkFrame):
         btn_row = ctk.CTkFrame(win, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(0, 16))
 
-        def accept():
-            if self._active_peer and self._active_peer in self._conversations:
-                self._conversations[self._active_peer]["key_warning"] = False
-            win.destroy()
+        peer_id = self._active_peer
+
+        def _clear_warning():
+            if peer_id and peer_id in self._conversations:
+                self._conversations[peer_id]["key_warning"] = False
+                for m in self._conversations[peer_id]["messages"]:
+                    m.pop("_key_warning", None)
             self._key_banner.pack_forget()
             self._rebuild_conv_list()
+
+        def accept():
+            win.destroy()
+            ks = self.app.keystore
+            if ks is None or not peer_id:
+                # No keystore to re-pin into; just clear the flag as before.
+                _clear_warning()
+                return
+            headers = {"Authorization": f"Bearer {self.app.token}"}
+
+            def run():
+                try:
+                    resp = requests.get(f"{BASE_URL}/api/keys/{peer_id}",
+                                        headers=headers, verify=VERIFY_SSL)
+                    resp.raise_for_status()
+                    data = resp.json().get("data", [])
+                    for kt in ("x25519", "ed25519"):
+                        pub = next((k["publicKey"] for k in data
+                                    if k["keyType"] == kt), None)
+                        if pub is not None:
+                            # Overwrite the pin: the user has accepted the new key.
+                            ks.pin_peer_key(peer_id, kt, pub)
+                    self.app.after(0, _clear_warning)
+                except Exception as e:
+                    self.app.after(0, lambda m=str(e): messagebox.showerror(
+                        "Error", m))
+            threading.Thread(target=run, daemon=True).start()
 
         ctk.CTkButton(btn_row, text="Accept New Key", height=36, width=140,
                       fg_color="#166534", hover_color="#14532d",
@@ -1100,24 +1240,60 @@ class MainFrame(ctk.CTkFrame):
                                  text_color="#22c55e")
                 return
 
+            # Fail closed: re-wrapping the keystore needs an unlocked keystore,
+            # and changing the password without it would lock the user out of
+            # their own private keys.
+            ks = self.app.keystore
+            if ks is None or not ks.exists():
+                status.configure(
+                    text="Encryption keys unavailable — cannot change password.",
+                    text_color="#ef4444")
+                return
+
+            # The server expects the same Argon2id auth-hash login/register send,
+            # NOT the cleartext password. The cleartext is still needed for the
+            # local keystore re-wrap (KEK derivation), so keep both around.
+            username = self.app.username
             headers = {"Authorization": f"Bearer {self.app.token}"}
             def run():
                 try:
                     resp = requests.put(
                         f"{BASE_URL}/api/auth/password",
-                        json={"currentPassword": cur, "newPassword": new},
+                        json={"currentPassword": derive_auth_hash(cur, username),
+                              "newPassword": derive_auth_hash(new, username)},
                         headers=headers, verify=VERIFY_SSL)
                     resp.raise_for_status()
-                    self.app.after(0, lambda: status.configure(
-                        text="Password changed successfully.",
-                        text_color="#22c55e"))
                 except requests.exceptions.HTTPError as e:
                     msg = e.response.json().get("error", {}).get("message", str(e))
                     self.app.after(0, lambda m=msg: status.configure(
                         text=m, text_color="#ef4444"))
+                    return
                 except Exception as e:
                     self.app.after(0, lambda m=str(e): status.configure(
                         text=m, text_color="#ef4444"))
+                    return
+
+                # Server is authoritative and already succeeded; now re-wrap the
+                # local keystore under the new password so private keys stay
+                # accessible on next unlock.
+                try:
+                    ks.change_password(cur, new)
+                except Exception as e:
+                    self.app.after(0, lambda m=str(e): status.configure(
+                        text="Password changed on server but local key "
+                             f"re-encryption failed — {m}", text_color="#ef4444"))
+                    return
+
+                # The change invalidated the current JWT server-side, so the
+                # session is dead — force a re-login with the new password.
+                def done():
+                    messagebox.showinfo(
+                        "Password Changed",
+                        "Password changed — please log in again "
+                        "with your new password.")
+                    win.destroy()
+                    self._logout()
+                self.app.after(0, done)
             threading.Thread(target=run, daemon=True).start()
 
 

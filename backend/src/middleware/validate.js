@@ -57,13 +57,6 @@ const validate = {
 
   sendMessage: [
     body('recipientId').isUUID().withMessage('Valid recipient ID required'),
-    // HPKE encapsulated key — 32-byte X25519 pubkey, base64 → 44 chars.
-    // VARCHAR(64) in the schema leaves headroom, but anything outside the
-    // 43–64 char window can't be a valid encapsulation.
-    body('enc')
-      .isString().withMessage('enc must be a string')
-      .isLength({ min: 43, max: 64 }).withMessage('enc length is not consistent with a 32-byte HPKE encapsulation')
-      .matches(/^[A-Za-z0-9+/=_-]+$/).withMessage('enc must be base64 or base64url'),
     body('ciphertext').notEmpty().withMessage('Ciphertext required'),
     // 12-byte AES-GCM IV, base64 → exactly 16 chars (CHAR(16) in schema).
     body('nonce')
@@ -88,20 +81,28 @@ const validate = {
   ],
 
   forwardMessage: [
+    // A forward is a direct message where the forwarder is the sender, so the
+    // crypto fields match sendMessage exactly: the forwarder re-encrypts the
+    // plaintext under the new recipient's pinned X25519 key with a fresh nonce,
+    // Ed25519-signs it, and supplies seq_no + digest. There is no enc field.
     param('id').isUUID().withMessage('Valid message ID required'),
     body('recipientId').isUUID().withMessage('Valid recipient ID required'),
-    // Per-share HPKE encapsulation — the forwarder re-encrypts under the
-    // new recipient's X25519 key, so enc is freshly generated, not copied
-    // from the original message.
-    body('enc')
-      .isString().withMessage('enc must be a string')
-      .isLength({ min: 43, max: 64 }).withMessage('enc length is not consistent with a 32-byte HPKE encapsulation')
-      .matches(/^[A-Za-z0-9+/=_-]+$/).withMessage('enc must be base64 or base64url'),
     body('ciphertext').notEmpty().withMessage('Re-encrypted ciphertext required'),
     body('nonce')
       .isString().withMessage('nonce must be a string')
       .isLength({ min: 16, max: 16 }).withMessage('nonce must be exactly 16 chars (base64 of 12-byte IV)')
       .matches(/^[A-Za-z0-9+/=_-]+$/).withMessage('nonce must be base64 or base64url'),
+    body('signature')
+      .isString().withMessage('signature must be a string')
+      .notEmpty().withMessage('Ed25519 signature required')
+      .matches(/^[A-Za-z0-9+/=_-]+$/).withMessage('signature must be base64 or base64url'),
+    body('seqNo')
+      .exists().withMessage('seqNo required')
+      .isInt({ min: 0 }).withMessage('seqNo must be a non-negative integer')
+      .toInt(),
+    body('digest')
+      .isString().withMessage('digest must be a string')
+      .matches(/^0x[0-9a-fA-F]{64}$/).withMessage('digest must be 0x + 64 hex chars (keccak256)'),
     handleValidation,
   ],
 

@@ -15,11 +15,11 @@ class MessageService {
     this._blockchain = blockchainService;
   }
 
-  async sendMessage({ senderId, recipientId, enc, ciphertext, nonce, signature, seqNo, digest }) {
+  async sendMessage({ senderId, recipientId, ciphertext, nonce, signature, seqNo, digest }) {
     const messageId = uuidv4();
 
     await this._messageRepo.create({
-      messageId, senderId, recipientId, enc, ciphertext, nonce, signature, seqNo, digestHash: digest,
+      messageId, senderId, recipientId, ciphertext, nonce, signature, seqNo, digestHash: digest,
     });
 
     // Hand the client-supplied digest to the blockchain service. The server
@@ -52,8 +52,13 @@ class MessageService {
   }
 
   async getInbox(userId, options) {
-    const rows = await this._messageRepo.findByRecipient(userId, options);
-    return rows.map(toMessageDTO);
+    // The inbox surfaces direct messages addressed to the user and forwarded
+    // shares received by the user as one stream. Both carry the same crypto
+    // fields (the forwarder is the sender of a share), so they merge cleanly
+    // and sort by createdAt DESC into a single chronological view.
+    const direct = (await this._messageRepo.findByRecipient(userId, options)).map(toMessageDTO);
+    const shared = (await this._messageRepo.findSharedWithUser(userId, options)).map(toSharedInboxDTO);
+    return [...direct, ...shared].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 
   async getSent(userId, options) {
@@ -80,7 +85,7 @@ class MessageService {
     return toMessageDTO(message);
   }
 
-  async forwardMessage({ messageId, forwarderId, recipientId, enc, ciphertext, nonce }) {
+  async forwardMessage({ messageId, forwarderId, recipientId, ciphertext, nonce, signature, seqNo, digest }) {
     // Authorisation: the forwarder must have access to the message —
     // either as the sender, the original recipient, or a current share
     // recipient. getMessage() throws NotFoundError / ForbiddenError if not.
@@ -93,9 +98,11 @@ class MessageService {
       messageId,
       sharedById: forwarderId,
       sharedWithId: recipientId,
-      enc,
       ciphertext,
       nonce,
+      signature,
+      seqNo,
+      digestHash: digest,
     });
 
     // Forwards do not trigger a new chain write — the original message's
@@ -138,7 +145,6 @@ class MessageService {
 function toMessageDTO(row) {
   const dto = {
     messageId: row.message_id,
-    enc: row.enc,
     ciphertext: row.ciphertext,
     nonce: row.nonce,
     signature: row.signature,
@@ -152,6 +158,31 @@ function toMessageDTO(row) {
   if (row.sender_username !== undefined) dto.senderUsername = row.sender_username;
   if (row.recipient_username !== undefined) dto.recipientUsername = row.recipient_username;
   return dto;
+}
+
+/**
+ * Maps a received-share row (from findSharedWithUser) to the inbox share shape.
+ * messageId is the SHARE row id (unique per share) so the client's per-message
+ * plaintext cache never collides when two people forward the same original to
+ * the same recipient; originalMessageId carries the original for the chain view
+ * and re-forwarding. senderId is the forwarder, so the client decrypts with the
+ * forwarder's pinned keys against the same replay counter as direct messages.
+ */
+function toSharedInboxDTO(row) {
+  return {
+    messageId: row.share_id,
+    originalMessageId: row.message_id,
+    shared: true,
+    senderId: row.sender_id,
+    senderUsername: row.sender_username,
+    ciphertext: row.ciphertext,
+    nonce: row.nonce,
+    signature: row.signature,
+    seqNo: row.seq_no,
+    digestHash: row.digest_hash,
+    chainStatus: row.chain_status,
+    createdAt: row.created_at,
+  };
 }
 
 module.exports = MessageService;

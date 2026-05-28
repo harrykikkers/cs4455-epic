@@ -29,6 +29,9 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 _AAD = b"zebra-keystore-v1"
+# Domain-separated AAD for the decrypted-message cache so its ciphertext can
+# never be confused with the key blob even though both are wrapped under the KEK.
+_CACHE_AAD = b"zebra-msgcache-v1"
 _b64e = lambda b: base64.b64encode(b).decode("ascii")
 
 # 128-bit salt — the Argon2 RFC 9106 recommendation. Random per keystore, so
@@ -102,6 +105,37 @@ class Keystore:
             raise RuntimeError("Keystore is locked — call unlock() first")
         return self._keys
 
+    def change_password(self, old_password: str, new_password: str) -> None:
+        """Re-wrap the stored private keys under a KEK derived from new_password.
+
+        Decrypts with the old password's KEK (which also verifies old_password),
+        then re-encrypts the same private-key blob under the new password's KEK
+        with a fresh nonce. The KDF salt is unchanged — it is random per keystore,
+        not password-derived, so it need not rotate. Updates the in-memory KEK and
+        keys so the unlocked session keeps working.
+        """
+        data = self._load()
+        salt = base64.b64decode(data["salt"])
+        old_kek = derive_kek(old_password, salt)
+        # Decrypt under the old KEK — raises InvalidTag on a wrong old password,
+        # which we let propagate so the caller can surface the failure.
+        plaintext = decrypt(old_kek, base64.b64decode(data["nonce"]),
+                            base64.b64decode(data["ciphertext"]), _AAD)
+        new_kek = derive_kek(new_password, salt)
+        nonce, ciphertext = encrypt(new_kek, plaintext, _AAD)
+        data["nonce"] = _b64e(nonce)
+        data["ciphertext"] = _b64e(ciphertext)
+        self._save(data)
+        self._kek = new_kek
+        self._keys = {"x25519": plaintext[:32], "ed25519": plaintext[32:64]}
+        # Re-wrap the decrypted-message cache under the new KEK too. The replay
+        # seq counters persist across the change, so if the cache stayed under
+        # the old KEK it would become unreadable and already-seen messages could
+        # no longer be re-decrypted (the replay check would reject them).
+        cache = self._decrypt_cache(old_kek)
+        if cache:
+            self.save_message_cache(cache)
+
     def pin_peer_key(self, user_id: str, key_type: str, public_key: str) -> None:
         """Record a peer's public key on first contact (TOFU)."""
         data = self._load()
@@ -113,10 +147,92 @@ class Keystore:
         data = self._load()
         return data.get("peers", {}).get(user_id, {}).get(key_type)
 
+    # --- per-peer sequence counters (replay protection) ------------------
+
+    def next_send_seq(self, recipient_id: str) -> int:
+        """Return (and persist) the next monotonic send counter for ``recipient_id``.
+
+        The message key is static per (sender, recipient) pair, so the sequence
+        number is what lets the recipient detect replays and reordering. Counters
+        are persisted so they keep climbing across restarts. Starts at 1.
+        """
+        data = self._load()
+        seqs = data.setdefault("seq_send", {})
+        nxt = int(seqs.get(recipient_id, 0)) + 1
+        seqs[recipient_id] = nxt
+        self._save(data)
+        return nxt
+
+    def last_recv_seq(self, sender_id: str) -> Optional[int]:
+        """Highest accepted sequence number from ``sender_id``, or ``None`` if unseen."""
+        data = self._load()
+        v = data.get("seq_recv", {}).get(sender_id)
+        return int(v) if v is not None else None
+
+    def set_recv_seq(self, sender_id: str, seq_no: int) -> None:
+        """Record the highest accepted sequence number seen from ``sender_id``."""
+        data = self._load()
+        data.setdefault("seq_recv", {})[sender_id] = int(seq_no)
+        self._save(data)
+
     def public_keys(self) -> dict:
         """Return the base64-encoded public keys (no password needed)."""
         data = self._load()
         return {"x25519": data["pub_x25519"], "ed25519": data["pub_ed25519"]}
+
+    # --- decrypted-message cache -----------------------------------------
+
+    def _cache_path(self) -> str:
+        """Path of the encrypted plaintext cache (a sibling of the keystore)."""
+        return self.path + ".msgcache"
+
+    def _decrypt_cache(self, kek: Optional[bytes]) -> dict:
+        """Decrypt the ``{messageId: plaintext}`` cache under ``kek``.
+
+        Returns ``{}`` if there is no KEK, no cache file, or the file cannot be
+        decrypted (e.g. it was written under a different password). The cache is
+        only a display convenience — a miss just means messages are re-decrypted
+        live on the next poll.
+        """
+        path = self._cache_path()
+        if kek is None or not os.path.exists(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                blob = json.load(f)
+            plaintext = decrypt(kek, base64.b64decode(blob["nonce"]),
+                                base64.b64decode(blob["ciphertext"]), _CACHE_AAD)
+            return json.loads(plaintext.decode("utf-8"))
+        except Exception:
+            return {}
+
+    def load_message_cache(self) -> dict:
+        """Return the persisted ``{messageId: plaintext}`` cache for this session.
+
+        Decrypted under the in-memory KEK, so the keystore must be unlocked.
+        Seeding the in-memory cache from this on startup lets already-read
+        messages display after a restart WITHOUT re-running the replay check:
+        the per-sender seq counters persist, so a live re-decrypt of an old
+        message would otherwise be rejected as a replay.
+        """
+        return self._decrypt_cache(self._kek)
+
+    def save_message_cache(self, cache: dict) -> None:
+        """Encrypt and persist the ``{messageId: plaintext}`` cache under the KEK.
+
+        No-op while the keystore is locked. Written atomically with owner-only
+        permissions like the keystore itself — it holds decrypted plaintext, so
+        it must never be left world-readable nor persisted in the clear.
+        """
+        if self._kek is None:
+            return
+        payload = json.dumps(cache).encode("utf-8")
+        nonce, ciphertext = encrypt(self._kek, payload, _CACHE_AAD)
+        self._write_json_secure(self._cache_path(), {
+            "version": _FORMAT_VERSION,
+            "nonce": _b64e(nonce),
+            "ciphertext": _b64e(ciphertext),
+        })
 
     # --- persistence -----------------------------------------------------
 
@@ -129,12 +245,18 @@ class Keystore:
         return data
 
     def _save(self, data: dict) -> None:
-        directory = os.path.dirname(self.path)
+        self._write_json_secure(self.path, data)
+
+    def _write_json_secure(self, path: str, data: dict) -> None:
+        directory = os.path.dirname(path)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        # Atomic, owner-only write: the file holds key material, so it must
-        # never be group/world readable nor left half-written on a crash.
-        tmp = f"{self.path}.tmp"
+        # Atomic, owner-only write: these files hold key material / decrypted
+        # plaintext, so they must never be group/world readable nor left
+        # half-written on a crash. The temp name is unique per write so two
+        # concurrent writers (e.g. a poll persisting the message cache while a
+        # send bumps a seq counter) cannot clobber each other's temp file.
+        tmp = f"{path}.{os.getpid()}.{base64.urlsafe_b64encode(os.urandom(6)).decode('ascii')}.tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -142,4 +264,4 @@ class Keystore:
         except BaseException:
             os.unlink(tmp)
             raise
-        os.replace(tmp, self.path)
+        os.replace(tmp, path)
