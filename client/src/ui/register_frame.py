@@ -3,6 +3,7 @@ import requests
 import customtkinter as ctk
 
 from config import BASE_URL, VERIFY_SSL
+from constants import MIN_PASSWORD_LENGTH
 from crypto.kdf import derive_auth_hash
 
 
@@ -23,7 +24,7 @@ class RegisterFrame(ctk.CTkFrame):
 
         for label, attr, kw in [
             ("Username", "username", {}),
-            ("Password (min 12 chars)", "password", {"show": "*"}),
+            (f"Password (min {MIN_PASSWORD_LENGTH} chars)", "password", {"show": "*"}),
             ("Confirm Password", "confirm", {"show": "*"}),
         ]:
             ctk.CTkLabel(inner, text=label, anchor="w").pack(fill="x", padx=30)
@@ -70,8 +71,8 @@ class RegisterFrame(ctk.CTkFrame):
         if not user or not pw:
             self._set_status("Username and password are required.")
             return
-        if len(pw) < 12:
-            self._set_status("Password must be at least 12 characters.")
+        if len(pw) < MIN_PASSWORD_LENGTH:
+            self._set_status(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
             return
         if pw != confirm:
             self._set_status("Passwords do not match.")

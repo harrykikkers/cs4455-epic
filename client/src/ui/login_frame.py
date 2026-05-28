@@ -3,6 +3,7 @@ import requests
 import customtkinter as ctk
 
 from config import BASE_URL, VERIFY_SSL
+from constants import DEV_MODE_TOKEN
 from crypto.kdf import derive_auth_hash
 
 
@@ -46,7 +47,7 @@ class LoginFrame(ctk.CTkFrame):
 
         # Dev bypass — skip backend entirely
         if user == "test" and pw == "test1234":
-            self.app.token    = "dev-token"
+            self.app.token    = DEV_MODE_TOKEN
             self.app.user_id  = "dev-user-id"
             self.app.username = "test"
             self.app._show_main()
