@@ -45,7 +45,7 @@ const config = {
   rateLimits: {
     register: { windowMs: 3600000, max: 5 },
     auth: { windowMs: 900000, max: 20 },
-    general: { windowMs: 900000, max: 200 },
+    general: { windowMs: 900000, max: 1000 },
   },
 };
 
