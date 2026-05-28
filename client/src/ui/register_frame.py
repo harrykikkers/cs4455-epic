@@ -3,6 +3,7 @@ import requests
 import customtkinter as ctk
 
 from config import BASE_URL, VERIFY_SSL
+from crypto.kdf import derive_auth_hash
 
 
 class RegisterFrame(ctk.CTkFrame):
@@ -97,7 +98,7 @@ class RegisterFrame(ctk.CTkFrame):
             try:
                 resp = requests.post(f"{BASE_URL}/api/auth/register", json={
                     "username": user,
-                    "password": pw,
+                    "password": derive_auth_hash(pw, user),
                 }, verify=VERIFY_SSL)
                 resp.raise_for_status()
 

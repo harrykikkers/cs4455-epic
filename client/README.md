@@ -272,10 +272,11 @@ secrets.
 ### Cryptographic Protocol — Alice sends a message to Bob
 
 **Step 1 — Unlock keys.**
-Alice logs in. Her password derives the local KEK via HKDF, decrypting
-her stored private keys. The local KEK is derived with a different salt
-and info string than the server auth token. The password is never sent
-to the server in plaintext.
+Alice logs in. Her password is used two independent, domain-separated ways:
+it derives the local KEK via HKDF (decrypting her stored private keys) and —
+separately — the [authentication credential](#authentication-credential) sent
+to the server. Both come from `crypto/kdf.py` with different salts and `info`
+strings; the cleartext password is never sent to the server.
 
 **Step 2 — Fetch Bob's public keys.**
 Alice requests Bob's X25519 and Ed25519 public keys from the server's
@@ -354,6 +355,38 @@ The Argon2id parameters and salt are stored alongside the encrypted keys
 in the keystore file. These parameters are **separate** from the
 server-side password hash — the server never sees the KEK or the salt
 used to derive it.
+
+### Authentication Credential
+
+The cleartext password never leaves the device — not even to the server.
+On register and login the client derives a password *pre-hash* and sends
+that as the `password` field instead:
+
+```
+auth_hash = HKDF-Expand(
+    prk  = Argon2id(password, salt),    # salt = SHA256("server-auth-salt-v1|" + username)[:16]
+    info = "server-auth-v1",
+    len  = 32
+)                                       # sent hex-encoded → 64 chars
+```
+
+The salt is derived **deterministically from the (normalised) username** so
+every login reproduces the same pre-hash. Per-user *random* salting happens
+server-side: the server treats `auth_hash` as the credential and re-hashes it
+with Argon2id under its own random salt before storing it, so a leaked
+`password_hash` is not directly replayable (see the backend's
+[Authentication](../backend/README.md#authentication) section).
+
+This derivation is **domain-separated** from the local KEK above — a
+different salt *and* a different HKDF `info` string ensure the value sent to
+the server can never coincide with the key that encrypts the private keys at
+rest. Password strength (min 12 chars) is checked client-side before hashing;
+the server only ever sees a uniform 64-hex credential.
+
+Implemented in `crypto/kdf.py` as `derive_auth_hash(password, username)` and
+used by `services/auth_service.py` (and the login/register UI frames). The
+pre-hash hides the plaintext from the server — it does **not** replace TLS,
+since the pre-hash is itself a password-equivalent in transit.
 
 ### TOFU Key Pinning
 
@@ -496,6 +529,9 @@ a message given the plaintext and transaction hash.
   which key.
 - **Never log secrets** — keystore contents, JWTs, plaintext messages.
   Use a logging filter to scrub these.
+- **Never send the cleartext password** — derive the authentication
+  pre-hash (`derive_auth_hash`, domain-separated from the KEK) and send that;
+  the server re-hashes it. See [Authentication Credential](#authentication-credential).
 - **Validate `SERVER_URL` uses HTTPS in production** — config layer should
   refuse `http://` for non-localhost hosts.
 - **Erase sensitive memory** — ephemeral keys and derived secrets must be
