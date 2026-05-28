@@ -1,23 +1,23 @@
+"""Shared fixtures for the client unit suite.
+
+These tests exercise the client's own code in isolation — no running
+backend. Network-touching layers (``api``/``services``) are driven with the
+``responses`` library or injected fakes; filesystem-touching code uses
+pytest's ``tmp_path``.
+"""
+
 import pytest
-from helpers import make_credentials, register_and_login
+
+from session import Session
 
 
 @pytest.fixture
-def user_a():
-    u, p = make_credentials()
-    token, uid, username = register_and_login(u, p)
-    return {"token": token, "user_id": uid, "username": username}
+def keystore_path(tmp_path):
+    """Path to a keystore file inside an isolated temp dir (not yet created)."""
+    return str(tmp_path / "keystore.json")
 
 
 @pytest.fixture
-def user_b():
-    u, p = make_credentials()
-    token, uid, username = register_and_login(u, p)
-    return {"token": token, "user_id": uid, "username": username}
-
-
-@pytest.fixture
-def user_c():
-    u, p = make_credentials()
-    token, uid, username = register_and_login(u, p)
-    return {"token": token, "user_id": uid, "username": username}
+def session():
+    """A fresh, unauthenticated session."""
+    return Session()

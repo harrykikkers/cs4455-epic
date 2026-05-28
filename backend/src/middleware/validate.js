@@ -16,6 +16,21 @@ function handleValidation(req, _res, next) {
   next();
 }
 
+// The client never sends the cleartext password. It sends a 64-char lowercase
+// hex Argon2id pre-hash (client crypto.kdf.derive_auth_hash), so the plaintext
+// never leaves the device. Password *strength* is therefore enforced
+// client-side; here we only check the credential's shape. AuthService still
+// salts and re-hashes this value with Argon2id (PasswordHasher) before storage,
+// so a leaked password_hash is not directly replayable.
+const AUTH_CREDENTIAL = /^[0-9a-f]{64}$/;
+
+function authCredential(field, label) {
+  return body(field)
+    .isString().withMessage(`${label} must be a string`)
+    .matches(AUTH_CREDENTIAL)
+    .withMessage(`${label} must be the client-side password hash (64 hex chars)`);
+}
+
 const validate = {
   register: [
     body('username')
@@ -24,23 +39,19 @@ const validate = {
       .withMessage('Username must be 3–30 characters')
       .matches(/^[a-zA-Z0-9_-]+$/)
       .withMessage('Username may only contain letters, numbers, hyphens, and underscores'),
-    body('password')
-      .isLength({ min: 12 })
-      .withMessage('Password must be at least 12 characters'),
+    authCredential('password', 'Password'),
     handleValidation,
   ],
 
   login: [
     body('username').trim().notEmpty().withMessage('Username required'),
-    body('password').notEmpty().withMessage('Password required'),
+    authCredential('password', 'Password'),
     handleValidation,
   ],
 
   changePassword: [
-    body('currentPassword').notEmpty().withMessage('Current password required'),
-    body('newPassword')
-      .isLength({ min: 12 })
-      .withMessage('New password must be at least 12 characters'),
+    authCredential('currentPassword', 'Current password'),
+    authCredential('newPassword', 'New password'),
     handleValidation,
   ],
 

@@ -6,7 +6,7 @@ Backend server for the CS4455 Epic Project secure messaging application.
 
 - **Runtime**: Node.js + Express
 - **Database**: MySQL 8
-- **Auth**: Argon2id password hashing, JWT sessions
+- **Auth**: Argon2id password hashing (client pre-hash + server re-hash), JWT sessions
 - **Blockchain**: ethers.js → Ethereum Sepolia testnet
 - **Security**: Helmet, CORS, rate limiting, input validation
 
@@ -125,6 +125,29 @@ npm start
 | GET | `/api/keys/:userId/history/:keyType` | Yes | Append-only key rotation history — clients reconcile pinned keys against this to detect server-side substitution |
 | GET | `/api/health` | No | Health check |
 
+### Authentication
+
+The cleartext password never reaches the server. The client sends an Argon2id
+*pre-hash* of the password — a 64-char lowercase hex string (client
+`crypto.kdf.derive_auth_hash`) — as the `password` field on `/register` and
+`/login` (and as `currentPassword` / `newPassword` on `/password`).
+
+The server treats that pre-hash as the credential and **hashes it again** with
+Argon2id (`PasswordHasher`, OWASP parameters) using its own per-user random
+salt before storing it in `users.password_hash`. So:
+
+- the server never learns the user's actual password — it cannot be logged or
+  leaked;
+- the stored `password_hash` is not directly replayable — a database leak does
+  not yield a value that can be sent straight back to `/login`.
+
+`middleware/validate.js` enforces the credential **shape** (exactly 64 hex
+chars) on the auth routes; password *strength* (length, etc.) is enforced
+client-side, since the server only ever sees the uniform pre-hash. Login stays
+time-constant (`AuthService` hashes even for unknown users so missing-user and
+wrong-password latency match), and the per-route rate limits in `app.js`
+remain the primary defence against online guessing.
+
 ### Blockchain integration
 
 The server **does not** compute message digests. The client computes
@@ -236,7 +259,10 @@ DDL lives in [scripts/init-db.js](scripts/init-db.js).
 ## Security Notes
 
 - The server **never** sees plaintext messages — only ciphertext
-- Passwords are hashed with Argon2id (OWASP-recommended parameters)
+- The server **never** sees the cleartext password — clients pre-hash it; the
+  server re-hashes that with Argon2id + a per-user random salt (OWASP
+  parameters), so a leaked `password_hash` is not directly replayable. See
+  [Authentication](#authentication)
 - All user input is validated and sanitised before processing
 - Rate limiting on auth endpoints prevents brute-force attacks
 - Helmet sets secure HTTP headers (HSTS, X-Frame-Options, etc.)
