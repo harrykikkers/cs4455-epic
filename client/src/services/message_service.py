@@ -1,23 +1,34 @@
 """Message orchestration — send / receive / forward / revoke / delete.
 
-Read/state actions delegate to :class:`~secure_messenger_client.api.messages.MessageAPI`;
-the crypto-dependent actions (send, receive-decrypt, forward) are PLANNED —
-they will run the pipeline in the README *Cryptographic Protocol*.
+Crypto-dependent actions (send, receive, forward) run the full pipeline from
+README *Cryptographic Protocol*: static ECDH + HKDF + AES-256-GCM + Ed25519.
+Read/state actions delegate to :class:`~api.messages.MessageAPI`.
 """
 
 from __future__ import annotations
 
+import base64
 from typing import Optional
 
 from api.messages import MessageAPI
+from crypto.keystore import Keystore
+from crypto.messaging import open_message, seal
+from services.key_service import KeyService
 from session import Session
 
 
 class MessageService:
     def __init__(self, api: Optional[MessageAPI] = None,
-                 session: Optional[Session] = None):
+                 session: Optional[Session] = None,
+                 keystore: Optional[Keystore] = None,
+                 key_service: Optional[KeyService] = None):
         self.session = session or Session()
         self.api = api or MessageAPI(self.session)
+        self.keystore = keystore or Keystore()
+        self.key_svc = key_service or KeyService(
+            session=self.session, keystore=self.keystore)
+
+    # ── read-only ────────────────────────────────────────────────────────
 
     def inbox(self):
         return self.api.inbox()
@@ -25,29 +36,118 @@ class MessageService:
     def sent(self):
         return self.api.sent()
 
-    def send(self, recipient_id: str, plaintext: str):
-        """Encrypt ``plaintext`` for the recipient and POST it.
+    # ── crypto actions ───────────────────────────────────────────────────
 
-        TODO: HPKE encapsulate → HKDF → AES-GCM (with replay-protected AAD)
-        → Ed25519 sign → keccak digest, then ``MessageAPI.send(...)``.
+    def send(self, recipient_id: str, plaintext: str) -> tuple[dict, bool]:
+        """Encrypt ``plaintext`` for ``recipient_id`` and POST it.
+
+        Full pipeline: TOFU fetch → static ECDH + HKDF → AES-256-GCM (with
+        replay-protected AAD) → Ed25519 sign → keccak256 digest.
+
+        Returns ``(response_data, changed)`` where ``changed`` is True if the
+        recipient's server key differs from the local TOFU pin.
         """
-        raise NotImplementedError("message encryption not yet implemented")
+        pinned, changed = self.key_svc.fetch_and_pin(recipient_id)
+        if "x25519" not in pinned:
+            raise RuntimeError("Recipient has no X25519 key on server.")
 
-    def receive(self, message_id: str) -> str:
-        """Fetch, verify, and decrypt a message; return the plaintext.
+        priv = self.keystore.private_keys()
+        seq_no = self.keystore.next_send_seq(recipient_id)
 
-        TODO: verify signature → check replay → HPKE decapsulate → HKDF →
-        AES-GCM decrypt (README step 10).
+        fields = seal(
+            plaintext=plaintext,
+            sender_id=self.session.user_id,
+            recipient_id=recipient_id,
+            seq_no=seq_no,
+            my_x_priv=priv["x25519"],
+            my_ed_priv=priv["ed25519"],
+            peer_x_pub=base64.b64decode(pinned["x25519"]),
+        )
+
+        resp = self.api.send(
+            recipient_id=recipient_id,
+            ciphertext=fields["ciphertext"],
+            nonce=fields["nonce"],
+            signature=fields["signature"],
+            seq_no=fields["seqNo"],
+            digest=fields["digest"],
+        )
+        return resp, changed
+
+    def receive(self, message: dict,
+                pinned: Optional[dict] = None,
+                changed: bool = False) -> tuple[str, bool]:
+        """Verify and decrypt a received message; return ``(plaintext, changed)``.
+
+        Four checks in order: Ed25519 signature → replay counter → static ECDH
+        + HKDF → AES-256-GCM decrypt. Plaintext is returned only after all four
+        pass. Raises :class:`~crypto.messaging.SignatureError`,
+        :class:`~crypto.messaging.ReplayError`, or ``InvalidTag`` on failure.
+        ``changed`` is True if the sender's server key differs from the TOFU pin.
+
+        Pass ``pinned`` + ``changed`` to skip the internal key fetch (avoids a
+        redundant network round-trip when the caller already has the keys).
         """
-        raise NotImplementedError("message decryption not yet implemented")
+        sender_id = message.get("senderId") or message.get("sender_id", "")
+        recipient_id = self.session.user_id
 
-    def forward(self, message_id: str, recipient_id: str):
-        """Re-encrypt a message under a new recipient and forward it.
+        if pinned is None:
+            pinned, changed = self.key_svc.fetch_and_pin(sender_id)
+        if "x25519" not in pinned or "ed25519" not in pinned:
+            raise RuntimeError("Sender has no keys on server.")
 
-        TODO: decrypt locally, re-encrypt for ``recipient_id``, then
-        ``MessageAPI.forward(...)``.
+        priv = self.keystore.private_keys()
+        last_seq = self.keystore.last_recv_seq(sender_id)
+
+        plaintext, seq_no = open_message(
+            fields=message,
+            sender_id=sender_id,
+            recipient_id=recipient_id,
+            my_x_priv=priv["x25519"],
+            peer_x_pub=base64.b64decode(pinned["x25519"]),
+            peer_ed_pub=base64.b64decode(pinned["ed25519"]),
+            last_seq=last_seq,
+        )
+
+        self.keystore.set_recv_seq(sender_id, seq_no)
+        return plaintext, changed
+
+    def forward(self, message_id: str, recipient_id: str, plaintext: str) -> tuple[dict, bool]:
+        """Re-encrypt ``plaintext`` under ``recipient_id``'s key and forward it.
+
+        A forward is the forwarder sending the already-decrypted plaintext to a
+        new recipient — sealed identically to a direct send so the recipient's
+        client handles it the same way. Returns ``(response_data, changed)``.
         """
-        raise NotImplementedError("re-encryption for forwarding not yet implemented")
+        pinned, changed = self.key_svc.fetch_and_pin(recipient_id)
+        if "x25519" not in pinned:
+            raise RuntimeError("Recipient has no X25519 key on server.")
+
+        priv = self.keystore.private_keys()
+        seq_no = self.keystore.next_send_seq(recipient_id)
+
+        fields = seal(
+            plaintext=plaintext,
+            sender_id=self.session.user_id,
+            recipient_id=recipient_id,
+            seq_no=seq_no,
+            my_x_priv=priv["x25519"],
+            my_ed_priv=priv["ed25519"],
+            peer_x_pub=base64.b64decode(pinned["x25519"]),
+        )
+
+        resp = self.api.forward(
+            message_id=message_id,
+            recipient_id=recipient_id,
+            ciphertext=fields["ciphertext"],
+            nonce=fields["nonce"],
+            signature=fields["signature"],
+            seq_no=fields["seqNo"],
+            digest=fields["digest"],
+        )
+        return resp, changed
+
+    # ── state actions ────────────────────────────────────────────────────
 
     def revoke(self, message_id: str, user_id: str):
         return self.api.revoke(message_id, user_id)

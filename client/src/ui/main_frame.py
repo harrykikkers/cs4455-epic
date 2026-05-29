@@ -12,6 +12,10 @@ import base64
 from config import BASE_URL, VERIFY_SSL
 from constants import DEV_MODE_TOKEN, MIN_PASSWORD_LENGTH, POLL_INTERVAL_MS, PREVIEW_MAX_CHARS, NOW_FMT
 from crypto.kdf import derive_auth_hash
+from crypto.messaging import SignatureError, ReplayError
+from errors import ClientError, NetworkError
+from session import Session
+from services.message_service import MessageService
 from ui.utils import _write_cache, _run_store_binary, _format_time, resolve_store_binary
 from ui.demo_data import DEMO_CONVERSATIONS
 
@@ -35,6 +39,11 @@ class MainFrame(ctk.CTkFrame):
                 self._plaintext_cache = {}
         self._dev = app.token == DEV_MODE_TOKEN
         self._alive = True  # set False on logout to stop the poll loop
+
+        _session = Session()
+        _session.set(app.token, app.user_id, app.username)
+        self._svc = MessageService(
+            session=_session, keystore=getattr(app, "keystore", None))
 
         # ── Left sidebar ──
         sidebar = ctk.CTkFrame(self, width=280, corner_radius=0,
@@ -203,37 +212,6 @@ class MainFrame(ctk.CTkFrame):
                      text_color="#ef4444", font=ctk.CTkFont(size=11),
                      wraplength=220, justify="center").pack(pady=20)
 
-    def _fetch_and_pin(self, user_id, headers):
-        """Fetch a peer's public keys and reconcile against the TOFU pin.
-
-        Returns ``(result, changed)`` where ``result`` is a dict possibly
-        containing "x25519"/"ed25519" base64 strings (the key to USE for crypto)
-        and ``changed`` is True if any pinned key differs from the server's
-        current key. On a difference we keep the PINNED key (secure TOFU) and do
-        not auto-trust the new server key. Runs in a worker thread.
-        """
-        ks = self.app.keystore
-        resp = requests.get(f"{BASE_URL}/api/keys/{user_id}",
-                            headers=headers, verify=VERIFY_SSL)
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
-        result = {}
-        changed = False
-        for kt in ("x25519", "ed25519"):
-            pub = next((k["publicKey"] for k in data if k["keyType"] == kt), None)
-            if pub is None:
-                continue
-            pinned = ks.pinned_peer_key(user_id, kt)
-            if pinned is None:
-                ks.pin_peer_key(user_id, kt, pub)
-                result[kt] = pub
-            elif pinned != pub:
-                changed = True
-                result[kt] = pinned
-            else:
-                result[kt] = pinned
-        return result, changed
-
     def _schedule_poll(self):
         if not self._alive:
             return
@@ -318,8 +296,6 @@ class MainFrame(ctk.CTkFrame):
         order: the inbox is sorted by created_at DESC, but the replay check is
         strictly-increasing, so out-of-order application would falsely reject.
         """
-        from crypto.messaging import open_message, SignatureError, ReplayError
-
         ks = self.app.keystore
         added = False  # whether any new plaintext was decrypted this pass
 
@@ -343,34 +319,17 @@ class MainFrame(ctk.CTkFrame):
                     m["plaintext"] = "[encrypted — keys locked]"
                     continue
                 try:
-                    pinned, changed = self._fetch_and_pin(sender_id, headers)
+                    pinned, key_changed = self._svc.key_svc.fetch_and_pin(sender_id)
                 except Exception:
                     m["plaintext"] = "[encrypted — cannot fetch sender key]"
                     continue
-                if changed:
-                    m["_key_warning"] = True
                 if "x25519" not in pinned or "ed25519" not in pinned:
                     m["plaintext"] = "[encrypted — sender key missing]"
                     continue
-                priv = ks.private_keys()
-                last_seq = ks.last_recv_seq(sender_id)
-                fields = {
-                    "ciphertext": m["ciphertext"],
-                    "nonce": m["nonce"],
-                    "signature": m["signature"],
-                    "seqNo": m.get("seqNo", m.get("seq_no")),
-                }
                 try:
-                    pt, seq = open_message(
-                        fields=fields,
-                        sender_id=sender_id,
-                        recipient_id=self.app.user_id,
-                        my_x_priv=priv["x25519"],
-                        peer_x_pub=base64.b64decode(pinned["x25519"]),
-                        peer_ed_pub=base64.b64decode(pinned["ed25519"]),
-                        last_seq=last_seq,
-                    )
-                    ks.set_recv_seq(sender_id, seq)
+                    pt, _ = self._svc.receive(m, pinned=pinned, changed=key_changed)
+                    if key_changed:
+                        m["_key_warning"] = True
                     m["plaintext"] = pt
                     self._plaintext_cache[message_id] = pt
                     added = True
@@ -626,46 +585,18 @@ class MainFrame(ctk.CTkFrame):
         peer_id = self._active_peer
         peer_name = self._conversations[peer_id]["name"]
 
-        headers = {"Authorization": f"Bearer {self.app.token}"}
         def run():
-            # Fail closed: without unlocked keys we cannot encrypt, and we must
-            # NEVER fall back to sending plaintext.
-            ks = self.app.keystore
-            if ks is None:
+            if self.app.keystore is None:
                 self.app.after(0, lambda: messagebox.showerror(
                     "Cannot send",
                     "Encryption keys are locked — please log in again."))
                 return
             try:
-                # Fetch + reconcile the recipient's keys (secure TOFU).
-                pinned, changed = self._fetch_and_pin(peer_id, headers)
-                if "x25519" not in pinned:
-                    raise RuntimeError("Recipient has no X25519 key on server.")
-                # ed25519 is only needed to verify their replies, not to send.
+                resp_data, changed = self._svc.send(peer_id, text)
                 if changed:
                     self.app.after(0, lambda: self._conversations
                                    .get(peer_id, {}).update({"key_warning": True}))
-
-                priv = ks.private_keys()
-                seq_no = ks.next_send_seq(peer_id)
-
-                from crypto.messaging import seal
-                fields = seal(
-                    plaintext=text,
-                    sender_id=self.app.user_id,
-                    recipient_id=peer_id,
-                    seq_no=seq_no,
-                    my_x_priv=priv["x25519"],
-                    my_ed_priv=priv["ed25519"],
-                    peer_x_pub=base64.b64decode(pinned["x25519"]),
-                )
-
-                payload = {"recipientId": peer_id, **fields}
-                resp = requests.post(f"{BASE_URL}/api/messages",
-                                     json=payload, headers=headers,
-                                     verify=VERIFY_SSL)
-                resp.raise_for_status()
-                msg_id = resp.json().get("data", {}).get("messageId")
+                msg_id = (resp_data or {}).get("data", {}).get("messageId")
                 now = datetime.datetime.now().strftime(NOW_FMT)
                 msg = {
                     "messageId": msg_id,
@@ -680,16 +611,13 @@ class MainFrame(ctk.CTkFrame):
                 }
                 if msg_id:
                     self._plaintext_cache[msg_id] = text
-                    # Persist immediately so a sent message survives a restart
-                    # even if the app closes before the next inbox poll.
                     try:
-                        ks.save_message_cache(self._plaintext_cache)
+                        self.app.keystore.save_message_cache(self._plaintext_cache)
                     except Exception:
                         pass
                 self.app.after(0, lambda: self._on_send_success(msg))
-            except requests.exceptions.HTTPError as e:
-                err = e.response.json().get("error", {}).get("message", str(e))
-                self.app.after(0, lambda m=err: messagebox.showerror("Send failed", m))
+            except (ClientError, NetworkError) as e:
+                self.app.after(0, lambda m=str(e): messagebox.showerror("Send failed", m))
             except Exception as e:
                 self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
         threading.Thread(target=run, daemon=True).start()
@@ -729,27 +657,18 @@ class MainFrame(ctk.CTkFrame):
             return
 
         headers = {"Authorization": f"Bearer {self.app.token}"}
-        # A forward is just "the forwarder sends the plaintext to a new
-        # recipient" under static ECDH, so it seals exactly like _send: a forward
-        # posts to the ORIGINAL message id (forwards create no chain entry).
         orig_id = m.get("originalMessageId") or m.get("messageId")
         plaintext = m.get("plaintext")
         def run():
-            # Fail closed: without unlocked keys we cannot seal, and we must
-            # NEVER fall back to plaintext or dummy fields.
-            ks = self.app.keystore
-            if ks is None:
+            if self.app.keystore is None:
                 self.app.after(0, lambda: messagebox.showerror(
                     "Cannot forward",
                     "Encryption keys are locked — please log in again."))
                 return
-            # A message we never decrypted (or a fail-closed placeholder) has no
-            # plaintext to re-seal. The placeholders are bracketed sentinels.
             if not plaintext or plaintext.startswith("["):
                 self.app.after(0, lambda: messagebox.showerror(
                     "Cannot forward",
-                    "Cannot forward — this message has not been "
-                    "decrypted on this device."))
+                    "Cannot forward — this message has not been decrypted on this device."))
                 return
             try:
                 resp = requests.get(f"{BASE_URL}/api/auth/user",
@@ -757,30 +676,10 @@ class MainFrame(ctk.CTkFrame):
                                     headers=headers, verify=VERIFY_SSL)
                 resp.raise_for_status()
                 rid = resp.json()["data"]["userId"]
-
-                # Fetch + reconcile the recipient's keys (secure TOFU), then seal.
-                pinned, changed = self._fetch_and_pin(rid, headers)
-                if "x25519" not in pinned:
-                    raise RuntimeError("Recipient has no X25519 key on server.")
-                priv = ks.private_keys()
-                seq_no = ks.next_send_seq(rid)
-
-                from crypto.messaging import seal
-                fields = seal(
-                    plaintext=plaintext,
-                    sender_id=self.app.user_id,
-                    recipient_id=rid,
-                    seq_no=seq_no,
-                    my_x_priv=priv["x25519"],
-                    my_ed_priv=priv["ed25519"],
-                    peer_x_pub=base64.b64decode(pinned["x25519"]),
-                )
-
-                resp2 = requests.post(
-                    f"{BASE_URL}/api/messages/{orig_id}/forward",
-                    json={"recipientId": rid, **fields},
-                    headers=headers, verify=VERIFY_SSL)
-                resp2.raise_for_status()
+                _, changed = self._svc.forward(orig_id, rid, plaintext)
+                if changed:
+                    self.app.after(0, lambda: self._conversations
+                                   .get(rid, {}).update({"key_warning": True}))
                 self.app.after(0, lambda: messagebox.showinfo(
                     "Forwarded", f"Message forwarded to {recipient}."))
                 self.app.after(0, self._load)
@@ -788,9 +687,13 @@ class MainFrame(ctk.CTkFrame):
                 if e.response.status_code == 404:
                     self.app.after(0, lambda: messagebox.showerror(
                         "Not found", f'No user "{recipient}" exists.'))
+                elif e.response.status_code == 429:
+                    self.app.after(0, lambda: messagebox.showerror(
+                        "Rate limited", "Too many requests — wait a moment and try again."))
                 else:
-                    msg = str(e)
-                    self.app.after(0, lambda m=msg: messagebox.showerror("Error", m))
+                    self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
+            except (ClientError, NetworkError) as e:
+                self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
             except Exception as e:
                 self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
         threading.Thread(target=run, daemon=True).start()
