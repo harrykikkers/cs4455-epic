@@ -1,17 +1,18 @@
 import copy
 import datetime
 import os
+import subprocess
 import threading
 import requests
 import customtkinter as ctk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox
 
 import base64
 
 from config import BASE_URL, VERIFY_SSL
 from constants import DEV_MODE_TOKEN, MIN_PASSWORD_LENGTH, POLL_INTERVAL_MS, PREVIEW_MAX_CHARS, NOW_FMT
 from crypto.kdf import derive_auth_hash
-from ui.utils import _write_cache, _run_store_binary, _format_time
+from ui.utils import _write_cache, _run_store_binary, _format_time, resolve_store_binary
 from ui.demo_data import DEMO_CONVERSATIONS
 
 
@@ -967,6 +968,10 @@ class MainFrame(ctk.CTkFrame):
         threading.Thread(target=run, daemon=True).start()
 
     def _download_msg(self, m):
+        # Archive the decrypted message into the C++ encrypted local store.
+        # The plaintext never touches argv or disk in the clear: it is piped to
+        # the binary on stdin and the binary encrypts it (AES-256-GCM) under a
+        # key derived from the keystore KEK and passed only via env.
         plaintext = m.get("plaintext")
         if not plaintext:
             messagebox.showinfo(
@@ -974,23 +979,61 @@ class MainFrame(ctk.CTkFrame):
                 "Cannot download — message has not been decrypted yet.")
             return
 
-        path = filedialog.asksaveasfilename(
-            title="Save Message",
-            defaultextension=".txt",
-            initialfile=f"message_{m.get('messageId', 'unknown')}.txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
-        if not path:
+        ks = self.app.keystore
+        if ks is None:
+            messagebox.showerror(
+                "Download failed",
+                "No keystore is loaded — log in before downloading.")
+            return
+        try:
+            # Derives the archive key; raises RuntimeError if the keystore is
+            # locked (no KEK in memory).
+            key_hex = ks.archive_key_hex()
+        except Exception as e:
+            messagebox.showerror(
+                "Download failed",
+                f"Keystore is locked — cannot derive the archive key.\n{e}")
             return
 
-        try:
-            with open(path, "w") as f:
-                f.write(f"From: {m.get('sender_username', '?')}\n")
-                f.write(f"Date: {m.get('created_at', '?')}\n")
-                f.write(f"Message ID: {m.get('messageId', '?')}\n")
-                f.write(f"---\n{plaintext}\n")
-            messagebox.showinfo("Downloaded", f"Message saved to:\n{path}")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+        binary = resolve_store_binary()
+        if binary is None:
+            messagebox.showerror(
+                "Download failed",
+                "The message-store binary was not found.\n\n"
+                "Build it first:\n"
+                "  cd message-store && cmake -B build && cmake --build build\n\n"
+                "Or set MESSAGE_STORE_BIN to its path.")
+            return
+
+        archive   = ks.archive_path()
+        message_id = str(m.get("messageId", "?"))
+        sender     = m.get("sender_username", "?")
+        created    = m.get("created_at", "?")
+
+        def run():
+            try:
+                env = {**os.environ, "MESSAGE_STORE_KEY": key_hex}
+                result = subprocess.run(
+                    [binary, "add",
+                     "--archive", archive,
+                     "--id", message_id,
+                     "--sender", sender,
+                     "--created", created],
+                    input=plaintext.encode("utf-8"),
+                    env=env, capture_output=True)
+                if result.returncode == 0:
+                    self.app.after(0, lambda: messagebox.showinfo(
+                        "Downloaded",
+                        "Message saved to your encrypted local archive."))
+                else:
+                    err = (result.stderr.decode("utf-8", "replace").strip()
+                           or f"message-store exited with code {result.returncode}")
+                    self.app.after(0, lambda e=err: messagebox.showerror(
+                        "Download failed", e))
+            except Exception as e:
+                self.app.after(0, lambda e=str(e): messagebox.showerror(
+                    "Download failed", e))
+        threading.Thread(target=run, daemon=True).start()
 
     def _view_chain(self, m):
         # Forwards create no chain entry, so a forwarded message's on-chain

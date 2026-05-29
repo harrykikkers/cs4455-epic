@@ -449,8 +449,10 @@ for details, settings, and prompts.
   message appears in the thread; in live mode it is posted to the backend and
   the thread reloads.
 - **Message actions.** A bubble's **⋯** menu opens **Details**, **Forward**,
-  **Download**, and **Delete** (own messages only). **Download** saves the
-  plaintext to a file; **Delete** asks for confirmation first.
+  **Download**, and **Delete** (own messages only). **Download** archives the
+  decrypted message into the C++ encrypted local store (see
+  [Message Download](#message-download-c-message-store)); **Delete** asks for
+  confirmation first.
 - **Forward & revoke.** **Forward** prompts for a recipient username and
   re-sends the message to them. In **Details**, each recipient the message
   was forwarded to can have their access **Revoke**d (with confirmation).
@@ -464,26 +466,47 @@ for details, settings, and prompts.
 
 ### Message Download (C++ message store)
 
-**Current behavior:** the **Download** action saves the message's plaintext
-to a user-chosen `.txt` file via a native save dialog. The flow below is the
-planned integration with the C++ store.
+The **Download** action archives a decrypted message into the **C++ local
+message store** — a separate component that manages an encrypted on-disk
+archive of downloaded messages. Plaintext is decrypted locally and handed to
+the C++ binary; it is never written to disk in the clear and never passed on
+the command line. The flow is:
 
-When a user downloads a message, the Python client decrypts it locally
-and hands the plaintext to the **C++ local message store** — a separate
-component that manages an encrypted on-disk archive of downloaded
-messages. The flow is:
+1. User selects a message (owned or shared) and clicks **Download**.
+2. The Python client uses the locally decrypted plaintext (the message must
+   already be decrypted — otherwise Download reports it cannot proceed).
+3. The client derives a 32-byte **archive key** from the keystore KEK
+   (`HKDF-Expand(SHA256, info="zebra-msgarchive-v1")`, domain-separated from
+   the KEK and the message cache) and passes it to the binary **only** via the
+   `MESSAGE_STORE_KEY` environment variable as 64 lowercase hex chars.
+4. The plaintext is piped to the binary on **stdin** (never argv). The binary
+   is invoked as:
 
-1. User selects a message (owned or shared) and clicks **Download**
-2. Python client fetches the ciphertext from the server, decrypts it
-   locally, and writes the plaintext to a temporary file
-3. The C++ message store binary is invoked to import, index, and
-   encrypt the message into its local store
-4. The temporary plaintext file is securely erased
+   ```
+   message-store add --archive <keystore>.archive \
+       --id <messageId> --sender <sender> --created <iso8601>
+   ```
 
-The C++ component is documented separately in
-[`cpp-message-store/`](../cpp-message-store/). It handles persistent
-local storage, search, and export — the Python client only handles
-decryption and handoff.
+5. The C++ store encrypts the message with **AES-256-GCM** under the archive
+   key and appends it to its archive at `<keystore>.archive` (a sibling of the
+   keystore). A non-zero exit surfaces the binary's stderr in an error dialog;
+   exit codes are `0` ok, `2` usage/key error, `3` not found, `1` other.
+
+The subprocess call runs on a background thread so the UI stays responsive
+(see [Threading](#threading)).
+
+**Locating the binary.** The client resolves `message-store` in this order:
+the `MESSAGE_STORE_BIN` environment override, the default cmake build location
+`<repo>/message-store/build/message-store`, then a `PATH` lookup. If none is
+found, Download shows a clear error telling the user to build it first:
+
+```bash
+cd message-store && cmake -B build && cmake --build build
+```
+
+The C++ component lives in [`message-store/`](../message-store/) and handles
+persistent local storage, search, and export — the Python client only handles
+decryption and the handoff (key via env, plaintext via stdin).
 
 ### Threading
 
