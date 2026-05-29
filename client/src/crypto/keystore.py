@@ -23,7 +23,9 @@ import config
 from crypto.aead import decrypt, encrypt
 from crypto.kdf import derive_kek
 from crypto.signing import generate_keypair as _ed25519_keypair
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.serialization import (
     Encoding, NoEncryption, PrivateFormat, PublicFormat,
 )
@@ -32,6 +34,11 @@ _AAD = b"zebra-keystore-v1"
 # Domain-separated AAD for the decrypted-message cache so its ciphertext can
 # never be confused with the key blob even though both are wrapped under the KEK.
 _CACHE_AAD = b"zebra-msgcache-v1"
+# Domain-separated HKDF ``info`` for the C++ message-store archive key. The
+# archive key is derived from (but never equal to) the KEK, so the same
+# password material that wraps the private keys / message cache cannot be
+# confused with the key handed to the external archive binary.
+_ARCHIVE_INFO = b"zebra-msgarchive-v1"
 _b64e = lambda b: base64.b64encode(b).decode("ascii")
 
 # 128-bit salt — the Argon2 RFC 9106 recommendation. Random per keystore, so
@@ -179,6 +186,33 @@ class Keystore:
         """Return the base64-encoded public keys (no password needed)."""
         data = self._load()
         return {"x25519": data["pub_x25519"], "ed25519": data["pub_ed25519"]}
+
+    # --- C++ message-store archive ---------------------------------------
+
+    def archive_path(self) -> str:
+        """Path of the C++ message-store archive (a sibling of the keystore)."""
+        return self.path + ".archive"
+
+    def archive_key(self) -> bytes:
+        """Derive the 32-byte AES key for the C++ message-store archive.
+
+        ``HKDF-Expand(SHA256, len=32, info="zebra-msgarchive-v1")`` over the
+        in-memory KEK. Domain-separated from the KEK itself and from the
+        message-cache use, so the key handed to the external archive binary can
+        never coincide with either. Raises ``RuntimeError`` while the keystore
+        is locked (no KEK in memory).
+        """
+        if self._kek is None:
+            raise RuntimeError("Keystore is locked — call unlock() first")
+        return HKDFExpand(
+            algorithm=hashes.SHA256(),
+            length=32,
+            info=_ARCHIVE_INFO,
+        ).derive(self._kek)
+
+    def archive_key_hex(self) -> str:
+        """Return :meth:`archive_key` as 64 lowercase hex chars (for the binary's env)."""
+        return self.archive_key().hex()
 
     # --- decrypted-message cache -----------------------------------------
 

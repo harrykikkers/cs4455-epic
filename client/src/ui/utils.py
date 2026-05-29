@@ -7,14 +7,41 @@ import base64
 import json
 import os
 import pathlib
-import platform
+import shutil
 import subprocess
 from datetime import datetime, date
 
 from constants import NOW_FMT
 
-_STORE_BINARY = pathlib.Path(__file__).parents[3] / "message-store" / "build" / "zebra-store"
+# Repo root is four levels up from this file: client/src/ui/utils.py -> repo.
+_REPO_ROOT    = pathlib.Path(__file__).parents[3]
 _CACHE_FILE   = pathlib.Path.home() / ".zebra" / "messages.json"
+
+# Name of the C++ message-store archive binary used by the Download action.
+# Resolution order (see resolve_store_binary): MESSAGE_STORE_BIN env override,
+# the default cmake build location, then a PATH lookup.
+_ARCHIVE_BINARY_NAME = "message-store"
+_ARCHIVE_BINARY      = _REPO_ROOT / "message-store" / "build" / _ARCHIVE_BINARY_NAME
+
+
+def resolve_store_binary() -> str | None:
+    """Locate the C++ ``message-store`` archive binary, or ``None`` if absent.
+
+    Resolution order, per the message-store CLI contract:
+
+    1. ``MESSAGE_STORE_BIN`` environment override (an explicit path),
+    2. the default cmake build location ``<repo>/message-store/build/message-store``,
+    3. a ``PATH`` lookup via :func:`shutil.which`.
+
+    Returns the resolved path as a string, or ``None`` when no binary is found
+    (the caller surfaces a "build message-store first" error in that case).
+    """
+    override = os.environ.get("MESSAGE_STORE_BIN")
+    if override and os.path.exists(override):
+        return override
+    if _ARCHIVE_BINARY.exists():
+        return str(_ARCHIVE_BINARY)
+    return shutil.which(_ARCHIVE_BINARY_NAME)
 
 
 def _write_cache(inbox: list, sent: list) -> None:
@@ -38,21 +65,26 @@ def _write_cache(inbox: list, sent: list) -> None:
 
 
 def _run_store_binary() -> None:
-    """Call the C++ zebra-store binary to index the local cache (Linux only)."""
-    if platform.system() != "Linux":
-        return
-    if not _STORE_BINARY.exists():
+    """Index the local ciphertext cache via the C++ ``message-store`` viewer.
+
+    Best-effort and silent: if the binary has not been built yet
+    (``resolve_store_binary`` returns ``None``) we simply skip indexing — the
+    cache on disk is still up to date for the next run. Reads only the
+    ciphertext envelope cache, never plaintext.
+    """
+    binary = resolve_store_binary()
+    if binary is None:
         return
     try:
         result = subprocess.run(
-            [str(_STORE_BINARY), str(_CACHE_FILE)],
+            [str(binary), "view", str(_CACHE_FILE)],
             capture_output=True, text=True, timeout=5)
         if result.stdout:
             print(result.stdout, end="")
         if result.returncode != 0 and result.stderr:
-            print(f"[zebra-store] {result.stderr.strip()}")
+            print(f"[message-store] {result.stderr.strip()}")
     except Exception as e:
-        print(f"[zebra-store] {e}")
+        print(f"[message-store] {e}")
 
 
 def _dummy_msg_fields(plaintext=""):
