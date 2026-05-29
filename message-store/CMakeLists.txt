@@ -13,6 +13,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
+# --- libcurl (HTTPS chain verification with TLS certificate verification) ---
+find_package(CURL REQUIRED)
+
 # --- OpenSSL (AES-256-GCM via EVP) ---
 # On macOS Homebrew installs under /opt/homebrew/opt/openssl@3; hint find_package
 # if the caller didn't already pass -DOPENSSL_ROOT_DIR.
@@ -20,6 +23,7 @@ if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR AND EXISTS "/opt/homebrew/opt/openssl@
     set(OPENSSL_ROOT_DIR "/opt/homebrew/opt/openssl@3")
 endif()
 find_package(OpenSSL REQUIRED)
+
 
 # Legacy in-memory conversation-view demo (kept compiling).
 add_executable(demo demo.cpp MessageStore.cpp)
@@ -31,4 +35,5 @@ target_link_libraries(message-store
     PRIVATE
         nlohmann_json::nlohmann_json
         OpenSSL::Crypto
+        CURL::libcurl
 )

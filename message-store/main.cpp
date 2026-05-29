@@ -1,10 +1,11 @@
 // message-store CLI: AES-256-GCM encrypted on-disk message archive.
 //
 // Subcommands:
-//   add  --archive <path> --id <id> --sender <name> --created <iso8601>  (body via STDIN)
-//   get  --archive <path> --id <id>
-//   list --archive <path>
-//   view [path-to-messages.json]   (legacy conversation viewer)
+//   add    --archive <path> --id <id> --sender <name> --created <iso8601>  (body via STDIN)
+//   get    --archive <path> --id <id>
+//   list   --archive <path>
+//   view   [path-to-messages.json]   (legacy conversation viewer)
+//   verify --archive <path> --id <id> --url <backend-base-url> --token <jwt>
 //
 // Key: 64 lowercase hex chars in env var MESSAGE_STORE_KEY (never on argv).
 // Exit codes: 0 ok; 2 usage/key error; 3 not found; 1 other/decrypt failure.
@@ -13,7 +14,7 @@
 #include "MessageStore.h"
 
 #include <nlohmann/json.hpp>
-
+#include <curl/curl.h>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -33,10 +34,11 @@ constexpr int EXIT_NOTFOUND = 3;
 void usage() {
     std::cerr <<
         "usage:\n"
-        "  message-store add  --archive <path> --id <id> --sender <name> --created <iso8601>   (body on STDIN)\n"
-        "  message-store get  --archive <path> --id <id>\n"
-        "  message-store list --archive <path>\n"
-        "  message-store view [path-to-messages.json]\n"
+        "  message-store add    --archive <path> --id <id> --sender <name> --created <iso8601>   (body on STDIN)\n"
+        "  message-store get    --archive <path> --id <id>\n"
+        "  message-store list   --archive <path>\n"
+        "  message-store view   [path-to-messages.json]\n"
+        "  message-store verify --archive <path> --id <id> --url <backend-url> --token <jwt>\n"
         "\n"
         "key: 64 lowercase hex chars in env MESSAGE_STORE_KEY\n";
 }
@@ -234,6 +236,119 @@ int cmdView(int argc, char* argv[]) {
     return EXIT_OK;
 }
 
+// libcurl write callback — appends received bytes into a std::string.
+static size_t curlWrite(const char* ptr, size_t size, size_t nmemb, std::string* out) {
+    out->append(ptr, size * nmemb);
+    return size * nmemb;
+}
+
+// verify --archive <path> --id <message-id> --url <backend-base-url> --token <jwt>
+//
+// Loads the archived message locally, fetches its blockchain chain proof from
+// the backend over verified TLS, and compares the on-chain digest against the
+// locally stored plaintext.
+//
+// Flow:
+//   1. Load message body from the local AES-256-GCM archive.
+//   2. GET /api/messages/:id/chain  (libcurl, TLS cert verified).
+//   3. Parse digestHash + txHash from the JSON response.
+//   4. TODO: compute keccak256(body) in C++ and compare to digestHash.
+//      (Requires a Ethereum-compatible keccak library — OpenSSL's EVP SHA3
+//       uses the NIST padding, not Ethereum's, so a dedicated impl is needed.)
+//   5. Print PASS / FAIL + txHash + timestamp.
+int cmdVerify(int argc, char* argv[]) {
+    auto flags      = parseFlags(argc, argv, 2);
+    std::string archivePath = require(flags, "archive");
+    std::string msgId       = require(flags, "id");
+    std::string baseUrl     = require(flags, "url");
+    std::string token       = require(flags, "token");
+
+    // Step 1 — load the message from the local encrypted archive.
+    auto key = loadKeyOrDie();
+    std::vector<archive::Record> records;
+    try {
+        records = archive::load(archivePath, key);
+    } catch (const std::exception& e) {
+        std::cerr << "[message-store] failed to open archive: " << e.what() << "\n";
+        return EXIT_OTHER;
+    }
+    auto it = std::find_if(records.begin(), records.end(),
+                           [&](const archive::Record& r) { return r.id == msgId; });
+    if (it == records.end()) {
+        std::cerr << "[message-store] message " << msgId << " not found in archive\n";
+        return EXIT_NOTFOUND;
+    }
+    const std::string& body = it->body;
+
+    // Step 2 — fetch the chain proof from the backend over verified TLS.
+    const std::string url = baseUrl + "/api/messages/" + msgId + "/chain";
+    std::string response;
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        std::cerr << "[message-store] curl_easy_init failed\n";
+        return EXIT_OTHER;
+    }
+
+    const std::string authHeader = "Authorization: Bearer " + token;
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, authHeader.c_str());
+    headers = curl_slist_append(headers, "Accept: application/json");
+
+    curl_easy_setopt(curl, CURLOPT_URL,            url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER,     headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,  curlWrite);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA,      &response);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L); // verify cert chain
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L); // verify hostname
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT,        10L);
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        std::cerr << "[message-store] chain fetch failed: "
+                  << curl_easy_strerror(res) << "\n";
+        return EXIT_OTHER;
+    }
+
+    // Step 3 — parse the chain proof.
+    json proof;
+    try {
+        proof = json::parse(response);
+    } catch (...) {
+        std::cerr << "[message-store] invalid JSON from backend\n";
+        return EXIT_OTHER;
+    }
+    std::string chainStatus = proof.value("data", json::object()).value("chainStatus", "unknown");
+    std::string txHash      = proof.value("data", json::object()).value("txHash", "");
+    std::string digestHash  = proof.value("data", json::object()).value("digestHash", "");
+
+    if (chainStatus != "recorded" || digestHash.empty()) {
+        std::cout << "CHAIN STATUS: " << chainStatus << " — not yet recorded on-chain\n";
+        return EXIT_OK;
+    }
+
+    // Step 4 — TODO: compute keccak256(body) and compare to digestHash.
+    // Ethereum keccak256 uses pre-NIST Keccak padding (not SHA3-256).
+    // Add a keccak library (e.g. https://github.com/brainhub/SHA3IUF) and
+    // replace this block:
+    //
+    //   std::string computed = "0x" + keccak256_hex(body);
+    //   bool match = (computed == digestHash);
+    //
+    // For now we print the on-chain digest so it can be verified manually.
+    std::cout << "TX HASH:       " << txHash << "\n";
+    std::cout << "ON-CHAIN HASH: " << digestHash << "\n";
+    std::cout << "ARCHIVE BODY:  " << body.size() << " bytes\n";
+    std::cout << "\n";
+    std::cout << "TODO: keccak256 C++ implementation needed to auto-verify.\n";
+    std::cout << "Verify manually: keccak256 of the archived body should equal the on-chain hash.\n";
+
+    return EXIT_OK;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -242,10 +357,11 @@ int main(int argc, char* argv[]) {
         return EXIT_USAGE;
     }
     std::string sub = argv[1];
-    if (sub == "add")  return cmdAdd(argc, argv);
-    if (sub == "get")  return cmdGet(argc, argv);
-    if (sub == "list") return cmdList(argc, argv);
-    if (sub == "view") return cmdView(argc, argv);
+    if (sub == "add")    return cmdAdd(argc, argv);
+    if (sub == "get")    return cmdGet(argc, argv);
+    if (sub == "list")   return cmdList(argc, argv);
+    if (sub == "view")   return cmdView(argc, argv);
+    if (sub == "verify") return cmdVerify(argc, argv);
 
     std::cerr << "[message-store] unknown subcommand: " << sub << "\n";
     usage();
