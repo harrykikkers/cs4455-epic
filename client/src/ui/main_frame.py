@@ -954,7 +954,7 @@ class MainFrame(ctk.CTkFrame):
         peer = self._conversations.get(self._active_peer, {}).get("name", "?")
         win = ctk.CTkToplevel(self.app)
         win.title("Key Change Detected")
-        win.geometry("420x340")
+        win.geometry("460x420")
         win.resizable(False, False)
         win.grab_set()
 
@@ -968,19 +968,16 @@ class MainFrame(ctk.CTkFrame):
         info.pack(fill="x", padx=20, pady=(0, 16))
 
         ctk.CTkLabel(info, text=f"{peer}'s encryption key has changed since\n"
-                     f"your last interaction. This could mean:",
+                     f"your last interaction.",
                      font=ctk.CTkFont(size=12), justify="left",
-                     wraplength=360).pack(padx=14, pady=(12, 8), anchor="w")
+                     wraplength=410).pack(padx=14, pady=(12, 8), anchor="w")
 
-        ctk.CTkLabel(info, text="1. They rotated their key (normal)\n"
-                     "2. Someone is intercepting messages (attack)",
-                     font=ctk.CTkFont(size=12), text_color="#888",
-                     justify="left").pack(padx=14, pady=(0, 8), anchor="w")
-
-        ctk.CTkLabel(info, text="Verify their identity through a separate\n"
-                     "channel before continuing.",
-                     font=ctk.CTkFont(size=12), text_color="#fbbf24",
-                     justify="left").pack(padx=14, pady=(0, 12), anchor="w")
+        # TOFU verdict — filled in by reconcile() in a worker thread below.
+        verdict = ctk.CTkLabel(
+            info, text="Checking this contact's signed key history…",
+            font=ctk.CTkFont(size=12), text_color="#888",
+            justify="left", wraplength=410)
+        verdict.pack(padx=14, pady=(0, 12), anchor="w")
 
         btn_row = ctk.CTkFrame(win, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(0, 16))
@@ -1017,9 +1014,10 @@ class MainFrame(ctk.CTkFrame):
                         "Error", m))
             threading.Thread(target=run, daemon=True).start()
 
-        ctk.CTkButton(btn_row, text="Accept New Key", height=36, width=140,
-                      fg_color="#166534", hover_color="#14532d",
-                      command=accept).pack(side="left", padx=(0, 6))
+        accept_btn = ctk.CTkButton(btn_row, text="Accept New Key", height=36,
+                                   width=140, fg_color="#166534",
+                                   hover_color="#14532d", command=accept)
+        accept_btn.pack(side="left", padx=(0, 6))
         ctk.CTkButton(btn_row, text="View History", height=36, width=120,
                       fg_color="#1e1e1e", hover_color="#2a2a2a",
                       command=lambda: self._view_key_history(peer_id, peer)
@@ -1027,6 +1025,44 @@ class MainFrame(ctk.CTkFrame):
         ctk.CTkButton(btn_row, text="Reject", height=36, width=90,
                       fg_color="#991b1b", hover_color="#7f1d1d",
                       command=win.destroy).pack(side="right")
+
+        # TOFU reconciliation: for each key type, KeyService.reconcile compares
+        # the server's current key to our local pin and, on a mismatch, checks
+        # the append-only key history. A change recorded in history is a
+        # legitimate rotation; one that is absent is a possible substitution
+        # attack. Network-bound, so it runs off the UI thread.
+        def _reconcile():
+            if self._dev or not peer_id:
+                self.app.after(0, lambda: verdict.configure(
+                    text="Key history is unavailable in demo mode.",
+                    text_color="#888"))
+                return
+            try:
+                legit = all(self._svc.key_svc.reconcile(peer_id, kt)
+                            for kt in ("x25519", "ed25519"))
+            except Exception as e:
+                self.app.after(0, lambda m=str(e): verdict.configure(
+                    text=f"Could not verify against the key history: {m}",
+                    text_color="#fbbf24"))
+                return
+            if legit:
+                self.app.after(0, lambda: verdict.configure(
+                    text="✓ Verified rotation — the previous key is recorded in "
+                         "this contact's signed key history, consistent with a "
+                         "normal key change. Accepting is reasonable.",
+                    text_color="#22c55e"))
+            else:
+                def show_attack():
+                    verdict.configure(
+                        text="⚠ The new key is NOT backed by this contact's key "
+                             "history — this may be a key-substitution attack. "
+                             "Do not accept unless you have verified their "
+                             "identity through a separate channel.",
+                        text_color="#ef4444")
+                    accept_btn.configure(fg_color="#7f1d1d",
+                                         hover_color="#991b1b")
+                self.app.after(0, show_attack)
+        threading.Thread(target=_reconcile, daemon=True).start()
 
     def _view_key_history(self, peer_id, peer_name):
         """Fetch and display the peer's append-only key rotation history.

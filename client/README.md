@@ -96,11 +96,6 @@ client/
 │   │   ├── message_service.py    # send / receive / forward / revoke / delete
 │   │   ├── key_service.py        # publish own key, fetch + pin peer keys, reconcile history
 │   │   └── chain_service.py      # fetch chain proof for a message
-│   ├── models/                   # Typed DTOs (dataclasses)
-│   │   ├── __init__.py
-│   │   ├── user.py
-│   │   ├── message.py
-│   │   └── key.py
 │   └── ui/                       # CustomTkinter GUI
 │       ├── __init__.py
 │       ├── app.py                # Main application window + frame manager
@@ -185,20 +180,17 @@ JSON encoding, status code → exception mapping) are hidden.
 | `POST /api/auth/register` | `AuthAPI.register(username, password)` | Returns `{ user_id }` |
 | `POST /api/auth/login` | `AuthAPI.login(username, password)` | Stores JWT in `Session` |
 | `PUT /api/auth/password` | `AuthAPI.change_password(current, new)` | Requires session |
-| `GET /api/auth/me` | `AuthAPI.me()` | Current user info |
+| `GET /api/auth/user` | `AuthAPI.get_user(username)` | Resolve a recipient username → user id (New Chat / Forward) |
 | `POST /api/messages` | `MessageAPI.send(recipient_id, ciphertext, nonce, signature, seq_no, digest)` | All crypto fields built by the crypto layer |
 | `GET /api/messages/inbox` | `MessageAPI.inbox()` | List of received messages |
 | `GET /api/messages/sent` | `MessageAPI.sent()` | List of sent messages |
-| `GET /api/messages/:id` | `MessageAPI.get(message_id)` | Single message |
 | `GET /api/messages/:id/chain` | `MessageAPI.chain(message_id)` | `{ digest_hash, chain_status, tx_hash, recorded_at }` |
 | `POST /api/messages/:id/forward` | `MessageAPI.forward(message_id, recipient_id, ciphertext, nonce, signature, seq_no, digest)` | Re-sealed under new recipient (same envelope as a direct send) |
 | `POST /api/messages/:id/revoke` | `MessageAPI.revoke(message_id)` | Revoke shared access |
 | `DELETE /api/messages/:id` | `MessageAPI.delete(message_id)` | Soft delete |
 | `POST /api/keys` | `KeyAPI.publish(public_key, key_type, acknowledge_rotation=False)` | Publish own public key |
-| `GET /api/keys` | `KeyAPI.list_all()` | Directory of all users' keys |
 | `GET /api/keys/:user_id` | `KeyAPI.get(user_id)` | Single user's current key |
 | `GET /api/keys/:user_id/history/:key_type` | `KeyAPI.history(user_id, key_type)` | Append-only rotation log — reconcile against pinned keys |
-| `GET /api/health` | `HealthAPI.check()` | Liveness probe |
 
 ### Error handling
 

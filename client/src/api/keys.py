@@ -22,10 +22,6 @@ class KeyAPI(BaseClient):
             "acknowledgeRotation": acknowledge_rotation,
         })
 
-    def list_all(self) -> Any:
-        """GET /api/keys — directory of all users' keys."""
-        return self._get("/api/keys")
-
     def get(self, user_id: str) -> Any:
         """GET /api/keys/:user_id — a single user's current key."""
         return self._get(f"/api/keys/{user_id}")

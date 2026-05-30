@@ -25,10 +25,6 @@ endif()
 find_package(OpenSSL REQUIRED)
 
 
-# Legacy in-memory conversation-view demo (kept compiling).
-add_executable(demo demo.cpp MessageStore.cpp)
-target_link_libraries(demo PRIVATE nlohmann_json::nlohmann_json)
-
 # Main CLI binary: message-store.
 add_executable(message-store main.cpp MessageStore.cpp Archive.cpp)
 target_link_libraries(message-store

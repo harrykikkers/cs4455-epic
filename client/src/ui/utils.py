@@ -3,7 +3,6 @@
 Constants that were previously here (DEV_MODE_TOKEN etc.) live in constants.py.
 """
 
-import base64
 import json
 import os
 import pathlib
@@ -85,19 +84,6 @@ def _run_store_binary() -> None:
             print(f"[message-store] {result.stderr.strip()}")
     except Exception as e:
         print(f"[message-store] {e}")
-
-
-def _dummy_msg_fields(plaintext=""):
-    """Return fake crypto fields that satisfy backend validation."""
-    b64 = lambda b: base64.b64encode(b).decode()
-    return {
-        "enc":        b64(os.urandom(32)),
-        "ciphertext": plaintext,
-        "nonce":      b64(os.urandom(12)),
-        "signature":  b64(os.urandom(64)),
-        "seqNo":      0,
-        "digest":     "0x" + "00" * 32,
-    }
 
 
 def _format_time(raw, short=False):

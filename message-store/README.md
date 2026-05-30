@@ -22,7 +22,6 @@ On macOS the `OPENSSL_ROOT_DIR` hint is applied automatically if
 Built binaries:
 
 - `message-store/build/message-store` — the CLI (main deliverable).
-- `message-store/build/demo` — legacy in-memory conversation-view demo.
 
 ## Key / environment contract
 
@@ -101,5 +100,4 @@ MESSAGE_STORE_KEY=$KEY message-store list --archive /tmp/arch.bin
   load/decrypt, save/encrypt, atomic write).
 - `main.cpp` — CLI dispatch, flag parsing, STDIN/env handling, legacy `view`.
 - `MessageStore.h` / `MessageStore.cpp` — legacy in-memory conversation model
-  (used by `demo` and `view`).
-- `demo.cpp` — legacy API demo.
+  (used by the `view` subcommand).

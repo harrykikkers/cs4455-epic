@@ -67,9 +67,3 @@ class BaseClient:
 
     def _delete(self, path: str, **kw: Any) -> Any:
         return self._request("DELETE", path, **kw)
-
-
-class HealthAPI(BaseClient):
-    def check(self) -> Any:
-        """GET /api/health — liveness probe."""
-        return self._get("/api/health")

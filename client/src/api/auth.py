@@ -23,10 +23,6 @@ class AuthAPI(BaseClient):
         return self._put("/api/auth/password",
                          json={"currentPassword": current, "newPassword": new})
 
-    def me(self) -> Any:
-        """GET /api/auth/me — current user info."""
-        return self._get("/api/auth/me")
-
     def get_user(self, username: str) -> Any:
         """GET /api/auth/user?username=… — look up a user by username.
 

@@ -33,10 +33,6 @@ class MessageAPI(BaseClient):
         """GET /api/messages/sent."""
         return self._get("/api/messages/sent")
 
-    def get(self, message_id: str) -> Any:
-        """GET /api/messages/:id."""
-        return self._get(f"/api/messages/{message_id}")
-
     def chain(self, message_id: str) -> Any:
         """GET /api/messages/:id/chain — blockchain anchor proof."""
         return self._get(f"/api/messages/{message_id}/chain")
