@@ -111,12 +111,12 @@ npm start
 | POST | `/api/auth/login` | No | Get JWT token |
 | PUT | `/api/auth/password` | Yes | Change password — body: `{ currentPassword, newPassword }` |
 | GET | `/api/auth/me` | Yes | Current user info |
-| POST | `/api/messages` | Yes | Send encrypted message — body: `{ recipientId, enc, ciphertext, nonce, signature, seqNo, digest }` where `enc` is the HPKE encapsulated key, `signature` is the Ed25519 signature over the payload, `seqNo` is the per-recipient sequence number, and `digest` is the client-computed keccak256 of plaintext (0x + 64 hex) |
+| POST | `/api/messages` | Yes | Send encrypted message — body: `{ recipientId, ciphertext, nonce, signature, seqNo, digest }` where `signature` is the Ed25519 signature over the payload, `seqNo` is the per-recipient sequence number, and `digest` is the client-computed keccak256 of plaintext (0x + 64 hex). The protocol is static ECDH (no per-message encapsulated key) |
 | GET | `/api/messages/inbox` | Yes | List received messages |
 | GET | `/api/messages/sent` | Yes | List sent messages |
 | GET | `/api/messages/:id` | Yes | Get single message |
 | GET | `/api/messages/:id/chain` | Yes | Chain proof: `{ digestHash, chainStatus, txHash, recordedAt }` — feed `txHash` into the standalone verification page |
-| POST | `/api/messages/:id/forward` | Yes | Forward to another user — body: `{ recipientId, enc, ciphertext, nonce }` (re-encrypted under the new recipient's key) |
+| POST | `/api/messages/:id/forward` | Yes | Forward to another user — body: `{ recipientId, ciphertext, nonce, signature, seqNo, digest }` (re-sealed under the new recipient's pinned key, same envelope as a direct send) |
 | POST | `/api/messages/:id/revoke` | Yes | Revoke shared access |
 | DELETE | `/api/messages/:id` | Yes | Soft-delete message |
 | POST | `/api/keys` | Yes | Publish public key — body: `{ publicKey, keyType, acknowledgeRotation? }` |
@@ -212,7 +212,6 @@ erDiagram
         CHAR_36 message_id PK
         CHAR_36 sender_id FK
         CHAR_36 recipient_id FK
-        VARCHAR_64 enc
         TEXT ciphertext
         CHAR_16 nonce
         TEXT signature
@@ -228,9 +227,11 @@ erDiagram
         CHAR_36 message_id FK
         CHAR_36 shared_by_id FK
         CHAR_36 shared_with_id FK
-        VARCHAR_64 enc
         TEXT ciphertext
         CHAR_16 nonce
+        TEXT signature
+        BIGINT seq_no
+        CHAR_66 digest_hash
         DATETIME created_at
         DATETIME revoked_at
     }

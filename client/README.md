@@ -8,14 +8,19 @@ plaintext.
 
 ## Status
 
-The package layout below is **in place**, and the GUI plus the auth/message
-flows against the backend are **implemented** (see [UI Layer](#ui-layer) and
-[User Flows](#user-flows)). The `api`, `services`, `crypto`, and `models`
-layers are **scaffolded** — their public surfaces exist but most methods
-raise `NotImplementedError`, and the UI still talks to the backend over HTTP
-directly rather than through these layers. The crypto layer in particular is
-unbuilt: the client sends placeholder crypto fields, so messages are **not
-yet end-to-end encrypted**. Remaining placeholders are called out below.
+This client is **implemented and working end-to-end**. The `crypto`,
+`services`, and `api` layers are built; registration, login, key publishing,
+and encrypted messaging all run the real pipeline. The message path performs
+genuine **static ECDH + HKDF + AES-256-GCM + Ed25519** encryption (see
+[Crypto Layer](#crypto-layer)) — verified by sending a message between two
+users and confirming the server stores only opaque ciphertext.
+
+The auth and messaging flows go through the service layer: the login/register
+frames call `AuthService`, and the chat panel drives `MessageService` /
+`KeyService` for send, receive, and forward. The remaining read/state
+operations in `main_frame` (inbox/sent listing, delete, key lookups, password
+change) still issue HTTP requests directly — a pending tidy-up, not a
+correctness gap, since none of them touch plaintext or private keys.
 
 ## Tech Stack
 
@@ -25,10 +30,9 @@ yet end-to-end encrypted**. Remaining placeholders are called out below.
   external system dependencies). See [UI layer](#ui-layer).
 - **HTTP**: `requests` (sync) — see *Concurrency model* below
 - **Crypto**:
-  - `pyhpke` — HPKE Mode_Base (`DHKEM(X25519, HKDF-SHA256)`) for key
-    encapsulation and forward secrecy
-  - `cryptography` — Ed25519 signing/verification, AES-256-GCM
-    authenticated encryption, HKDF-SHA256 key derivation
+  - `cryptography` — X25519 (static ECDH key agreement), Ed25519
+    signing/verification, AES-256-GCM authenticated encryption, HKDF-SHA256
+    key derivation
   - `argon2-cffi` — Argon2id password hashing (local KEK derivation for
     encrypting private keys at rest)
   - `pycryptodome` — keccak256 digest computation (blockchain anchoring)
@@ -46,7 +50,7 @@ Session (login state, JWT, current user)
     ↓
 Services           (compose API + crypto + local state)
     ↓     ↘
-API client     Crypto             (HPKE / Ed25519 / keccak)
+API client     Crypto             (static ECDH / Ed25519 / keccak)
     ↓              ↓
 HTTPS → server   Local keystore (private keys, pinned peer keys)
 ```
@@ -80,12 +84,13 @@ client/
 │   │   └── keys.py               # /api/keys/* wrappers
 │   ├── crypto/                   # Local cryptography — all E2EE happens here
 │   │   ├── __init__.py
-│   │   ├── hpke.py               # HPKE Mode_Base seal / open (pyhpke)
+│   │   ├── messaging.py          # seal / open: static ECDH + HKDF + AES-GCM + Ed25519
 │   │   ├── signing.py            # Ed25519 sign / verify (cryptography)
 │   │   ├── aead.py               # AES-256-GCM encrypt / decrypt (cryptography)
-│   │   ├── kdf.py                # HKDF-SHA256 + Argon2id KEK derivation
+│   │   ├── kdf.py                # HKDF-SHA256 message key + Argon2id KEK derivation
 │   │   ├── digest.py             # keccak256(plaintext) → 0x-prefixed hex (pycryptodome)
-│   │   └── keystore.py           # Local private key storage + KEK + pinned peer keys
+│   │   ├── keystore.py           # Local private key storage + KEK + pinned peer keys
+│   │   └── hpke.py               # legacy, unused — superseded by static ECDH in messaging.py
 │   ├── services/                 # Business logic
 │   │   ├── __init__.py
 │   │   ├── auth_service.py       # register, login, password change
@@ -182,12 +187,12 @@ JSON encoding, status code → exception mapping) are hidden.
 | `POST /api/auth/login` | `AuthAPI.login(username, password)` | Stores JWT in `Session` |
 | `PUT /api/auth/password` | `AuthAPI.change_password(current, new)` | Requires session |
 | `GET /api/auth/me` | `AuthAPI.me()` | Current user info |
-| `POST /api/messages` | `MessageAPI.send(recipient_id, enc, ciphertext, nonce, signature, seq_no, digest)` | All crypto fields built by the crypto layer |
+| `POST /api/messages` | `MessageAPI.send(recipient_id, ciphertext, nonce, signature, seq_no, digest)` | All crypto fields built by the crypto layer |
 | `GET /api/messages/inbox` | `MessageAPI.inbox()` | List of received messages |
 | `GET /api/messages/sent` | `MessageAPI.sent()` | List of sent messages |
 | `GET /api/messages/:id` | `MessageAPI.get(message_id)` | Single message |
 | `GET /api/messages/:id/chain` | `MessageAPI.chain(message_id)` | `{ digest_hash, chain_status, tx_hash, recorded_at }` |
-| `POST /api/messages/:id/forward` | `MessageAPI.forward(message_id, recipient_id, enc, ciphertext, nonce)` | Re-encrypted under new recipient |
+| `POST /api/messages/:id/forward` | `MessageAPI.forward(message_id, recipient_id, ciphertext, nonce, signature, seq_no, digest)` | Re-sealed under new recipient (same envelope as a direct send) |
 | `POST /api/messages/:id/revoke` | `MessageAPI.revoke(message_id)` | Revoke shared access |
 | `DELETE /api/messages/:id` | `MessageAPI.delete(message_id)` | Soft delete |
 | `POST /api/keys` | `KeyAPI.publish(public_key, key_type, acknowledge_rotation=False)` | Publish own public key |
@@ -247,9 +252,9 @@ any future CLI can share the same checks:
   directory; the compose screen only offers known users
 - **Sequence numbers** — validated as positive integers; the service
   layer manages the counter, the UI never sets it directly
-- **Hex-encoded crypto fields** — length and format checks before POSTing
-  (e.g. `enc`, `ciphertext`, `nonce`, `signature` must be valid hex of
-  expected byte lengths)
+- **Encoded crypto fields** — length and format checks before POSTing
+  (`ciphertext`, `nonce`, `signature` are base64; `digest` is `0x` + 64 hex),
+  each validated against its expected byte length
 
 Server-side validation is the last line of defence — the client does not
 rely on it.
@@ -264,8 +269,7 @@ secrets.
 
 | Library | Purpose | Why |
 |---------|---------|-----|
-| `pyhpke` | HPKE Mode_Base — `DHKEM(X25519, HKDF-SHA256)` | RFC 9180 compliant; provides key encapsulation with ephemeral keys for forward secrecy |
-| `cryptography` | Ed25519 signing/verification, AES-256-GCM, HKDF-SHA256 | Vetted, well-maintained; covers AEAD, KDF, and signing in one library |
+| `cryptography` | X25519 (static ECDH), Ed25519 signing/verification, AES-256-GCM, HKDF-SHA256 | Vetted, well-maintained; covers key agreement, AEAD, KDF, and signing in one library |
 | `argon2-cffi` | Argon2id password hashing | Memory-hard KDF for deriving the local key-encryption key (KEK) from the user's password |
 | `pycryptodome` | keccak256 digest | Computes the message digest that the server records on Sepolia |
 
@@ -284,62 +288,58 @@ key directory. On first contact she pins them (Trust On First Use). An
 attacker present at first contact can permanently pin their own key —
 this is a known TOFU limitation stated in the design document.
 
-**Step 3 — Generate ephemeral X25519 keypair.**
-Alice generates a fresh X25519 keypair for this message only. This is
-the foundation for forward secrecy — the private key will exist only
-long enough to derive the shared secret. The ephemeral keypair is
-generated using a CSPRNG (`os.urandom`), never any non-cryptographically
-secure source.
+**Step 3 — Derive the shared secret (static ECDH).**
+Alice computes `dh_out = X25519(alice_x25519_sk, bob_x25519_pk)` using her
+own long-term X25519 private key and Bob's pinned static X25519 public key.
+Bob recovers the identical value as `X25519(bob_x25519_sk, alice_x25519_pk)`.
+No per-message public key is sent on the wire — the recipient already holds
+the sender's pinned key, so static ECDH needs nothing extra. This is a
+**static** key agreement: the same shared secret is derived for every
+Alice→Bob message.
 
-**Step 4 — HPKE Mode_Base encapsulate.**
-Alice runs HPKE encapsulation using her ephemeral secret key and Bob's
-static X25519 public key. This produces a shared secret that only Bob
-can recover. Mode_Base means no sender authentication at the HPKE
-level — that is handled separately by Ed25519. The DH computation is
-`shared_secret = X25519(eph_sk, bob_x25519_pk)`. Bob will compute the
-same value as `X25519(bob_x25519_sk, eph_pk)`.
+> **Forward-secrecy tradeoff.** Because the key agreement is static (no
+> ephemeral keypair), this design does **not** provide forward secrecy — a
+> future compromise of either party's long-term X25519 key would expose past
+> messages. This is a deliberate simplification; see the design document.
 
-**Step 5 — HKDF derive message key + nonce.**
-Alice uses HKDF to derive the AES-256-GCM encryption key from the
-shared secret, with domain-separated info strings. The nonce is random,
-not counter-based, because each key is used exactly once — making
-collision probability negligible.
+**Step 4 — HKDF derive the message key.**
+Alice derives the AES-256-GCM key with `HKDF-SHA256(dh_out, info="zebra-msg-v1")`,
+domain-separated from the keystore KEK (`"local-key-encrypt-v1"`) and the auth
+credential (`"server-auth-v1"`) so the same material can never collide across
+purposes. The message key is **static per (sender, recipient) pair**, so AES-GCM
+stays secure only because a fresh nonce is used on every message (Step 5) — a
+repeated (key, nonce) pair would be catastrophic.
 
-**Step 6 — AES-256-GCM encrypt with replay-protected AAD.**
-Alice encrypts the plaintext client-side (never server-side). The AAD
-includes a monotonic sequence number per recipient, binding message
-ordering into the GCM authentication tag. The sequence number is per
-(sender, recipient) and strictly increasing. Alice stores her current
-counter for each recipient locally.
+**Step 5 — AES-256-GCM encrypt with replay-protected AAD.**
+Alice encrypts the plaintext client-side (never server-side) under a fresh
+12-byte nonce from the OS CSPRNG. The AAD is `sender_id ‖ recipient_id ‖ seq_no`,
+binding message ordering into the GCM authentication tag. The sequence number is
+per (sender, recipient) and strictly increasing; Alice persists her counter for
+each recipient locally.
 
-**Step 7 — Ed25519 sign payload.**
-Alice signs the entire outgoing payload with her long-term Ed25519
-signing key, proving to Bob that she authored this message. The
-signature covers the sequence number — an attacker cannot forge a valid
-signature with a different sequence number. The signature and GCM tag
-both independently protect message ordering.
+**Step 6 — Ed25519 sign.**
+Alice signs `sender_id ‖ recipient_id ‖ seq_no ‖ ciphertext ‖ nonce` with her
+long-term Ed25519 signing key, proving she authored this message. The signature
+covers the sequence number, so an attacker cannot forge a valid signature with a
+different `seq_no` — the signature and the GCM tag both independently protect
+ordering.
 
-**Step 8 — Erase ephemeral private key.**
-Alice securely erases the ephemeral X25519 private key and all derived
-secrets from memory. After this, nobody can decrypt this message from
-the wire payload. Forward secrecy is achieved at this step.
+**Step 7 — Transmit and store.**
+Alice sends the assembled payload (ciphertext, nonce, signature, seqNo, digest)
+over TLS to the server. The server stores it as an opaque blob and records its
+keccak256 digest on-chain. The server only ever sees ciphertext and metadata.
 
-**Step 9 — Transmit and store.**
-Alice sends the assembled payload over TLS to the server. The server
-stores it as an opaque blob and records its keccak256 hash on-chain.
-The server only ever sees ciphertext and metadata.
-
-**Step 10 — Verify, check replay, decrypt (Bob's side).**
-Bob performs five checks in sequence: (1) signature verification
-(authenticity), (2) replay detection via sequence number against his
-local counter (ordering), (3) HPKE decapsulation to recover the shared
-secret, (4) HKDF expansion to derive the message key, and
-(5) AES-256-GCM decryption (confidentiality and integrity). Only after
-all five pass is the plaintext surfaced to the UI.
+**Step 8 — Verify, check replay, decrypt (Bob's side).**
+Bob performs four checks **in order**: (1) Ed25519 signature verification against
+Alice's pinned key (authenticity), (2) replay detection — `seq_no` must be
+strictly greater than the last accepted counter for Alice (ordering), (3) static
+ECDH + HKDF to recover the message key, and (4) AES-256-GCM decryption with the
+reconstructed AAD (confidentiality + integrity; a bad tag raises before any
+plaintext exists). Only after all four pass is the plaintext surfaced to the UI.
 
 ### Key Storage at Rest
 
-Private keys (X25519 decapsulation key + Ed25519 signing key) are stored
+Private keys (X25519 key-agreement key + Ed25519 signing key) are stored
 in `KEYSTORE_PATH` as a JSON file, encrypted under a key-encryption key
 (KEK) derived from the user's password:
 
@@ -557,7 +557,7 @@ a message given the plaintext and transaction hash.
   the server re-hashes it. See [Authentication Credential](#authentication-credential).
 - **Validate `SERVER_URL` uses HTTPS in production** — config layer should
   refuse `http://` for non-localhost hosts.
-- **Erase sensitive memory** — ephemeral keys and derived secrets must be
+- **Erase sensitive memory** — derived message keys and the keystore KEK must be
   overwritten after use. Python's garbage collector does not guarantee
   immediate erasure, so use `ctypes.memset` or `bytearray` zeroing
   where possible.
