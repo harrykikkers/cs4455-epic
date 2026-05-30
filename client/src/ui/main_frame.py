@@ -1257,6 +1257,11 @@ class MainFrame(ctk.CTkFrame):
                 # The change invalidated the current JWT server-side, so the
                 # session is dead — force a re-login with the new password.
                 def done():
+                    # Stop the 10s poll loop *before* the modal below: the JWT
+                    # is now invalid, and messagebox runs a nested event loop,
+                    # so otherwise every poll while the dialog is open would hit
+                    # the backend with a dead token (auth.token.invalidated).
+                    self._alive = False
                     messagebox.showinfo(
                         "Password Changed",
                         "Password changed — please log in again "
