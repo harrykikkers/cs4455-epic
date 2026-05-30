@@ -89,8 +89,7 @@ client/
 │   │   ├── aead.py               # AES-256-GCM encrypt / decrypt (cryptography)
 │   │   ├── kdf.py                # HKDF-SHA256 message key + Argon2id KEK derivation
 │   │   ├── digest.py             # keccak256(plaintext) → 0x-prefixed hex (pycryptodome)
-│   │   ├── keystore.py           # Local private key storage + KEK + pinned peer keys
-│   │   └── hpke.py               # legacy, unused — superseded by static ECDH in messaging.py
+│   │   └── keystore.py           # Local private key storage + KEK + pinned peer keys
 │   ├── services/                 # Business logic
 │   │   ├── __init__.py
 │   │   ├── auth_service.py       # register, login, password change

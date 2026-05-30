@@ -26,3 +26,11 @@ class AuthAPI(BaseClient):
     def me(self) -> Any:
         """GET /api/auth/me — current user info."""
         return self._get("/api/auth/me")
+
+    def get_user(self, username: str) -> Any:
+        """GET /api/auth/user?username=… — look up a user by username.
+
+        Used to resolve a recipient (New Chat / Forward) to a user id. Raises
+        ``NotFoundError`` (404) if no such user exists.
+        """
+        return self._get("/api/auth/user", params={"username": username})

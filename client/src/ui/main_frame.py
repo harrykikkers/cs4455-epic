@@ -3,18 +3,15 @@ import datetime
 import os
 import subprocess
 import threading
-import requests
 import customtkinter as ctk
 from tkinter import messagebox
 
-import base64
-
-from config import BASE_URL, VERIFY_SSL
 from constants import DEV_MODE_TOKEN, MIN_PASSWORD_LENGTH, POLL_INTERVAL_MS, PREVIEW_MAX_CHARS, NOW_FMT
-from crypto.kdf import derive_auth_hash
 from crypto.messaging import SignatureError, ReplayError
-from errors import ClientError, NetworkError
+from errors import ClientError, NetworkError, NotFoundError, RateLimitError
 from session import Session
+from services.auth_service import AuthService
+from services.chain_service import ChainService
 from services.message_service import MessageService
 from ui.utils import _write_cache, _run_store_binary, _format_time, resolve_store_binary
 from ui.demo_data import DEMO_CONVERSATIONS
@@ -42,8 +39,10 @@ class MainFrame(ctk.CTkFrame):
 
         _session = Session()
         _session.set(app.token, app.user_id, app.username)
-        self._svc = MessageService(
-            session=_session, keystore=getattr(app, "keystore", None))
+        _ks_handle = getattr(app, "keystore", None)
+        self._svc = MessageService(session=_session, keystore=_ks_handle)
+        self._auth = AuthService(session=_session, keystore=_ks_handle)
+        self._chain = ChainService(session=_session)
 
         # ── Left sidebar ──
         sidebar = ctk.CTkFrame(self, width=280, corner_radius=0,
@@ -182,23 +181,16 @@ class MainFrame(ctk.CTkFrame):
         if self._dev:
             self._populate_dev()
             return
-        headers = {"Authorization": f"Bearer {self.app.token}"}
         def run():
             try:
-                r_inbox = requests.get(f"{BASE_URL}/api/messages/inbox",
-                                       headers=headers, verify=VERIFY_SSL)
-                r_inbox.raise_for_status()
-                r_sent = requests.get(f"{BASE_URL}/api/messages/sent",
-                                      headers=headers, verify=VERIFY_SSL)
-                r_sent.raise_for_status()
-                inbox = r_inbox.json().get("data", [])
-                sent  = r_sent.json().get("data", [])
-                self._decrypt_inbox(inbox, headers)
+                inbox = (self._svc.inbox() or {}).get("data", [])
+                sent  = (self._svc.sent() or {}).get("data", [])
+                self._decrypt_inbox(inbox)
                 _write_cache(inbox, sent)
                 _run_store_binary()
                 if self._alive:
                     self.app.after(0, lambda i=inbox, s=sent: self._alive and self._populate(i, s))
-            except requests.exceptions.ConnectionError:
+            except NetworkError:
                 self.app.after(0, lambda: self._alive and self._show_load_error(
                     "Cannot reach server — is the backend running?"))
             except Exception as e:
@@ -288,7 +280,7 @@ class MainFrame(ctk.CTkFrame):
                 # Only redraw the message area when something actually changed.
                 self._open_chat(self._active_peer)
 
-    def _decrypt_inbox(self, inbox, headers):
+    def _decrypt_inbox(self, inbox):
         """Decrypt received messages in the worker thread (network + crypto).
 
         Each message dict is mutated in place with ``plaintext`` (and possibly
@@ -656,7 +648,6 @@ class MainFrame(ctk.CTkFrame):
                 f"a new keccak256 hash on-chain.)")
             return
 
-        headers = {"Authorization": f"Bearer {self.app.token}"}
         orig_id = m.get("originalMessageId") or m.get("messageId")
         plaintext = m.get("plaintext")
         def run():
@@ -671,11 +662,7 @@ class MainFrame(ctk.CTkFrame):
                     "Cannot forward — this message has not been decrypted on this device."))
                 return
             try:
-                resp = requests.get(f"{BASE_URL}/api/auth/user",
-                                    params={"username": recipient},
-                                    headers=headers, verify=VERIFY_SSL)
-                resp.raise_for_status()
-                rid = resp.json()["data"]["userId"]
+                rid = self._auth.api.get_user(recipient)["data"]["userId"]
                 _, changed = self._svc.forward(orig_id, rid, plaintext)
                 if changed:
                     self.app.after(0, lambda: self._conversations
@@ -683,15 +670,12 @@ class MainFrame(ctk.CTkFrame):
                 self.app.after(0, lambda: messagebox.showinfo(
                     "Forwarded", f"Message forwarded to {recipient}."))
                 self.app.after(0, self._load)
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 404:
-                    self.app.after(0, lambda: messagebox.showerror(
-                        "Not found", f'No user "{recipient}" exists.'))
-                elif e.response.status_code == 429:
-                    self.app.after(0, lambda: messagebox.showerror(
-                        "Rate limited", "Too many requests — wait a moment and try again."))
-                else:
-                    self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
+            except NotFoundError:
+                self.app.after(0, lambda: messagebox.showerror(
+                    "Not found", f'No user "{recipient}" exists.'))
+            except RateLimitError:
+                self.app.after(0, lambda: messagebox.showerror(
+                    "Rate limited", "Too many requests — wait a moment and try again."))
             except (ClientError, NetworkError) as e:
                 self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
             except Exception as e:
@@ -717,12 +701,9 @@ class MainFrame(ctk.CTkFrame):
             self._open_chat(self._active_peer)
             return
 
-        headers = {"Authorization": f"Bearer {self.app.token}"}
         def run():
             try:
-                resp = requests.delete(f"{BASE_URL}/api/messages/{msg_id}",
-                                       headers=headers, verify=VERIFY_SSL)
-                resp.raise_for_status()
+                self._svc.delete(msg_id)
                 self.app.after(0, self._load)
             except Exception as e:
                 self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
@@ -854,14 +835,9 @@ class MainFrame(ctk.CTkFrame):
             return
 
         msg_id = m.get("messageId")
-        headers = {"Authorization": f"Bearer {self.app.token}"}
         def run():
             try:
-                resp = requests.post(
-                    f"{BASE_URL}/api/messages/{msg_id}/revoke",
-                    json={"userId": user_id},
-                    headers=headers, verify=VERIFY_SSL)
-                resp.raise_for_status()
+                self._svc.revoke(msg_id, user_id)
                 self.app.after(0, lambda: messagebox.showinfo(
                     "Revoked", f"{username}'s access has been revoked."))
                 self.app.after(0, self._load)
@@ -956,14 +932,9 @@ class MainFrame(ctk.CTkFrame):
             messagebox.showinfo("Blockchain Proof", info)
             return
 
-        headers = {"Authorization": f"Bearer {self.app.token}"}
         def run():
             try:
-                resp = requests.get(
-                    f"{BASE_URL}/api/messages/{msg_id}/chain",
-                    headers=headers, verify=VERIFY_SSL)
-                resp.raise_for_status()
-                data = resp.json()["data"]
+                data = self._chain.proof(msg_id)["data"]
                 info = (
                     f"Message ID: {data.get('messageId', msg_id)}\n"
                     f"Chain status: {data.get('chainStatus', '?')}\n"
@@ -1031,14 +1002,9 @@ class MainFrame(ctk.CTkFrame):
                 # No keystore to re-pin into; just clear the flag as before.
                 _clear_warning()
                 return
-            headers = {"Authorization": f"Bearer {self.app.token}"}
-
             def run():
                 try:
-                    resp = requests.get(f"{BASE_URL}/api/keys/{peer_id}",
-                                        headers=headers, verify=VERIFY_SSL)
-                    resp.raise_for_status()
-                    data = resp.json().get("data", [])
+                    data = self._svc.key_svc.api.get(peer_id).get("data", [])
                     for kt in ("x25519", "ed25519"):
                         pub = next((k["publicKey"] for k in data
                                     if k["keyType"] == kt), None)
@@ -1056,15 +1022,50 @@ class MainFrame(ctk.CTkFrame):
                       command=accept).pack(side="left", padx=(0, 6))
         ctk.CTkButton(btn_row, text="View History", height=36, width=120,
                       fg_color="#1e1e1e", hover_color="#2a2a2a",
-                      command=lambda: messagebox.showinfo(
-                          "Key History",
-                          f"Key history for {peer}:\n\n"
-                          f"(Will query GET /api/keys/{peer}/history\n"
-                          f"after crypto implementation)")
+                      command=lambda: self._view_key_history(peer_id, peer)
                       ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(btn_row, text="Reject", height=36, width=90,
                       fg_color="#991b1b", hover_color="#7f1d1d",
                       command=win.destroy).pack(side="right")
+
+    def _view_key_history(self, peer_id, peer_name):
+        """Fetch and display the peer's append-only key rotation history.
+
+        Pulls each key type's archived versions from
+        ``GET /api/keys/:userId/history/:keyType`` (via ``KeyService.api``).
+        The list holds prior (rotated-away) keys, oldest first; an empty list
+        means the peer's current key is their first and only one.
+        """
+        if self._dev or not peer_id:
+            messagebox.showinfo(
+                "Key History", "Key history is unavailable in demo mode.")
+            return
+
+        def run():
+            try:
+                sections = []
+                for kt in ("x25519", "ed25519"):
+                    entries = self._svc.key_svc.api.history(
+                        peer_id, kt).get("data", [])
+                    if not entries:
+                        sections.append(
+                            f"{kt}: no prior keys — current key is the first.")
+                        continue
+                    lines = [f"{kt}: {len(entries)} prior key(s)"]
+                    for e in entries:
+                        pub = e.get("publicKey", "") or ""
+                        fp = (pub[:16] + "…") if len(pub) > 16 else pub
+                        rotated = e.get("rotatedAt") or "—"
+                        lines.append(
+                            f"  v{e.get('version', '?')}  {fp}  (rotated: {rotated})")
+                    sections.append("\n".join(lines))
+                text = f"Key history for {peer_name}:\n\n" + "\n\n".join(sections)
+                self.app.after(0, lambda t=text: messagebox.showinfo(
+                    "Key History", t))
+            except Exception as e:
+                self.app.after(0, lambda m=str(e): messagebox.showerror(
+                    "Error", m))
+        threading.Thread(target=run, daemon=True).start()
 
     # ── New chat ──
 
@@ -1085,14 +1086,9 @@ class MainFrame(ctk.CTkFrame):
             self._open_chat(peer_id)
             return
 
-        headers = {"Authorization": f"Bearer {self.app.token}"}
         def run():
             try:
-                resp = requests.get(f"{BASE_URL}/api/auth/user",
-                                    params={"username": username},
-                                    headers=headers, verify=VERIFY_SSL)
-                resp.raise_for_status()
-                user = resp.json()["data"]
+                user = self._auth.api.get_user(username)["data"]
                 peer_id = user["userId"]
                 name = user["username"]
                 def open_chat():
@@ -1103,15 +1099,12 @@ class MainFrame(ctk.CTkFrame):
                                             self._conversations[peer_id])
                     self._open_chat(peer_id)
                 self.app.after(0, open_chat)
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 404:
-                    self.app.after(0, lambda: messagebox.showerror(
-                        "Not found", f'No user "{username}" exists.'))
-                elif e.response.status_code == 429:
-                    self.app.after(0, lambda: messagebox.showerror(
-                        "Rate limited", "Too many requests — wait a moment and try again."))
-                else:
-                    self.app.after(0, lambda: messagebox.showerror("Error", str(e)))
+            except NotFoundError:
+                self.app.after(0, lambda: messagebox.showerror(
+                    "Not found", f'No user "{username}" exists.'))
+            except RateLimitError:
+                self.app.after(0, lambda: messagebox.showerror(
+                    "Rate limited", "Too many requests — wait a moment and try again."))
             except Exception as e:
                 self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
         threading.Thread(target=run, daemon=True).start()
@@ -1196,22 +1189,17 @@ class MainFrame(ctk.CTkFrame):
                     text_color="#ef4444")
                 return
 
-            # The server expects the same Argon2id auth-hash login/register send,
-            # NOT the cleartext password. The cleartext is still needed for the
-            # local keystore re-wrap (KEK derivation), so keep both around.
-            username = self.app.username
-            headers = {"Authorization": f"Bearer {self.app.token}"}
+            # AuthService sends the Argon2id auth-hash (derived from the
+            # cleartext via the session username), NOT the cleartext password.
+            # The cleartext is still needed for the local keystore re-wrap (KEK
+            # derivation) below, so keep both around.
             def run():
                 try:
-                    resp = requests.put(
-                        f"{BASE_URL}/api/auth/password",
-                        json={"currentPassword": derive_auth_hash(cur, username),
-                              "newPassword": derive_auth_hash(new, username)},
-                        headers=headers, verify=VERIFY_SSL)
-                    resp.raise_for_status()
-                except requests.exceptions.HTTPError as e:
-                    msg = e.response.json().get("error", {}).get("message", str(e))
-                    self.app.after(0, lambda m=msg: status.configure(
+                    # Server step only — keystore re-wrap is handled separately
+                    # so its failure shows a distinct message.
+                    self._auth.change_password(cur, new)
+                except (ClientError, NetworkError) as e:
+                    self.app.after(0, lambda m=str(e): status.configure(
                         text=m, text_color="#ef4444"))
                     return
                 except Exception as e:

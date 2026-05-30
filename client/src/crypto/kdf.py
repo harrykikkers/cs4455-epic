@@ -3,9 +3,9 @@
 Three derivations, all domain-separated so the same password (or shared
 secret) never produces the same bytes for two different purposes:
 
-* ``derive_message_key`` — HKDF-Expand over the HPKE shared secret with a
-  domain-separated ``info`` string (README step 5). HPKE has already run the
-  HKDF-Extract step, so this is expand-only with no salt.
+* ``derive_message_key`` — HKDF-Expand over the static-ECDH shared secret
+  (``X25519(my_sk, peer_pk)``) with a domain-separated ``info`` string (README
+  step 4). Expand-only with no salt — the X25519 output is already uniform.
 
 * ``derive_kek`` — Argon2id over the user's password to produce the local
   key-encryption key for the keystore (README *Key Storage at Rest*). The KEK
@@ -44,7 +44,7 @@ def _argon2id(password: str, salt: bytes) -> bytes:
 
 
 def derive_message_key(shared_secret: bytes, info: bytes, length: int = 32) -> bytes:
-    """Derive a message key from the HPKE shared secret via HKDF-Expand."""
+    """Derive a message key from the static-ECDH shared secret via HKDF-Expand."""
     return HKDFExpand(
         algorithm=hashes.SHA256(),
         length=length,
