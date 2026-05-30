@@ -1,16 +1,4 @@
-"""Local private-key storage + KEK + pinned peer keys.
-
-Stores the user's X25519 decapsulation key and Ed25519 signing key in
-``KEYSTORE_PATH`` as JSON, encrypted under a KEK derived from the password
-(see :func:`crypto.kdf.derive_kek`). The KDF salt is generated once when the
-keystore is first created and persisted alongside the ciphertext, so every
-later unlock re-derives the identical KEK from the same password. Also holds
-TOFU-pinned peer public keys for reconciliation against the server's rotation
-history (README *TOFU Key Pinning*).
-
-Salt generation, KEK derivation, private-key encryption (``crypto.aead``),
-and TOFU peer-key pinning are all implemented here.
-"""
+"""Local private-key storage, KEK wrapping, TOFU peer-key pinning."""
 
 from __future__ import annotations
 
@@ -30,59 +18,45 @@ from cryptography.hazmat.primitives.serialization import (
     Encoding, NoEncryption, PrivateFormat, PublicFormat,
 )
 
+# AAD labels — tie each ciphertext to its purpose so blobs can't be mixed up.
 _AAD = b"zebra-keystore-v1"
-# Domain-separated AAD for the decrypted-message cache so its ciphertext can
-# never be confused with the key blob even though both are wrapped under the KEK.
 _CACHE_AAD = b"zebra-msgcache-v1"
-# Domain-separated HKDF ``info`` for the C++ message-store archive key. The
-# archive key is derived from (but never equal to) the KEK, so the same
-# password material that wraps the private keys / message cache cannot be
-# confused with the key handed to the external archive binary.
 _ARCHIVE_INFO = b"zebra-msgarchive-v1"
+
 _b64e = lambda b: base64.b64encode(b).decode("ascii")
+# Converts raw bytes to a base64 string.
+#  JSON can't store raw bytes, only strings.
 
-# 128-bit salt — the Argon2 RFC 9106 recommendation. Random per keystore, so
-# uniqueness is statistical and needs no coordination or collision checks.
-SALT_BYTES = 16
-
-# On-disk format version. Bump when the JSON layout or KDF parameters change
-# so an old keystore can be detected (and migrated) rather than silently
-# producing a wrong KEK.
-_FORMAT_VERSION = 1
+SALT_BYTES = 16       # 128-bit salt per RFC 9106
+_FORMAT_VERSION = 1   # bump to 2 if the JSON layout or KDF params change
 
 
 def generate_salt() -> bytes:
-    """Return a fresh, random 16-byte KDF salt (one per keystore)."""
     return os.urandom(SALT_BYTES)
 
 
 class Keystore:
     def __init__(self, path: Optional[str] = None):
         self.path = path or config.KEYSTORE_PATH
-        self._kek: Optional[bytes] = None
+        self._kek: Optional[bytes] = None   # None = locked
         self._keys: Optional[dict] = None
 
     def exists(self) -> bool:
         return os.path.exists(self.path)
 
     def create(self, password: str) -> None:
-        """Initialize a new keystore: generate the salt, derive and cache the KEK.
-
-        Generates the one and only salt for this keystore, persists it, and
-        keeps the derived KEK in memory for the rest of the session. Raises
-        ``FileExistsError`` if a keystore is already present so an accidental
-        re-registration cannot overwrite existing private keys.
-        """
+        """Create a new keystore: generate keypairs, encrypt under KEK, save."""
         if self.exists():
             raise FileExistsError(f"keystore already exists at {self.path}")
         salt = generate_salt()
-        self._kek = derive_kek(password, salt)
+        self._kek = derive_kek(password, salt) # kdf.py - derives the key encryption key from the password and salt
 
         x_priv = X25519PrivateKey.generate()
         x_priv_bytes = x_priv.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
         x_pub_bytes  = x_priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
         ed_priv_bytes, ed_pub_bytes = _ed25519_keypair()
 
+        # Encrypt both private keys as one 64-byte blob under the KEK.
         nonce, ciphertext = encrypt(self._kek, x_priv_bytes + ed_priv_bytes, _AAD)
 
         self._save(
@@ -91,41 +65,33 @@ class Keystore:
                 "salt":       _b64e(salt),
                 "nonce":      _b64e(nonce),
                 "ciphertext": _b64e(ciphertext),
-                "pub_x25519": _b64e(x_pub_bytes),
-                "pub_ed25519": _b64e(ed_pub_bytes),
+                "pub_x25519": _b64e(x_pub_bytes), # public key used for encryption
+                "pub_ed25519": _b64e(ed_pub_bytes), # public key used for signing
                 "peers":      {},
             }
         )
 
     def unlock(self, password: str) -> None:
-        """Derive the KEK from the persisted salt into memory."""
+        """Derive the KEK from the stored salt and decrypt private keys into memory."""
         data = self._load()
         salt = base64.b64decode(data["salt"])
         self._kek = derive_kek(password, salt)
         plaintext = decrypt(self._kek, base64.b64decode(data["nonce"]),
                             base64.b64decode(data["ciphertext"]), _AAD)
+        # First 32 bytes = X25519 private key, next 32 = Ed25519 private key.
         self._keys = {"x25519": plaintext[:32], "ed25519": plaintext[32:64]}
 
     def private_keys(self) -> dict:
-        """Return the decrypted X25519 + Ed25519 private keys."""
         if self._keys is None:
             raise RuntimeError("Keystore is locked — call unlock() first")
-        return self._keys
+        return self._keys # called by MessageService when sending or receiving
 
     def change_password(self, old_password: str, new_password: str) -> None:
-        """Re-wrap the stored private keys under a KEK derived from new_password.
-
-        Decrypts with the old password's KEK (which also verifies old_password),
-        then re-encrypts the same private-key blob under the new password's KEK
-        with a fresh nonce. The KDF salt is unchanged — it is random per keystore,
-        not password-derived, so it need not rotate. Updates the in-memory KEK and
-        keys so the unlocked session keeps working.
-        """
+        """Re-wrap the private-key blob under a new KEK. Salt is unchanged."""
         data = self._load()
         salt = base64.b64decode(data["salt"])
         old_kek = derive_kek(old_password, salt)
-        # Decrypt under the old KEK — raises InvalidTag on a wrong old password,
-        # which we let propagate so the caller can surface the failure.
+        # Wrong old password → InvalidTag propagates to caller.
         plaintext = decrypt(old_kek, base64.b64decode(data["nonce"]),
                             base64.b64decode(data["ciphertext"]), _AAD)
         new_kek = derive_kek(new_password, salt)
@@ -135,34 +101,27 @@ class Keystore:
         self._save(data)
         self._kek = new_kek
         self._keys = {"x25519": plaintext[:32], "ed25519": plaintext[32:64]}
-        # Re-wrap the decrypted-message cache under the new KEK too. The replay
-        # seq counters persist across the change, so if the cache stayed under
-        # the old KEK it would become unreadable and already-seen messages could
-        # no longer be re-decrypted (the replay check would reject them).
-        cache = self._decrypt_cache(old_kek)
+        cache = self._decrypt_cache(old_kek) # Re-wrap the message cache so it stays readable under the new KEK.
         if cache:
             self.save_message_cache(cache)
-
+        # -- TOFU --
     def pin_peer_key(self, user_id: str, key_type: str, public_key: str) -> None:
-        """Record a peer's public key on first contact (TOFU)."""
+        """Store a peer's public key on first contact (TOFU)."""
         data = self._load()
         data.setdefault("peers", {}).setdefault(user_id, {})[key_type] = public_key
+        # set default creates the peers dict if it doesnt exist yet
         self._save(data)
 
     def pinned_peer_key(self, user_id: str, key_type: str) -> Optional[str]:
-        """Return the pinned public key for a peer, or ``None`` if unseen."""
+        """Return the pinned key for a peer, or None if unseen."""
         data = self._load()
         return data.get("peers", {}).get(user_id, {}).get(key_type)
+        # --      --
 
-    # --- per-peer sequence counters (replay protection) ------------------
+    # --- sequence counters (replay protection) ----------------------------
 
     def next_send_seq(self, recipient_id: str) -> int:
-        """Return (and persist) the next monotonic send counter for ``recipient_id``.
-
-        The message key is static per (sender, recipient) pair, so the sequence
-        number is what lets the recipient detect replays and reordering. Counters
-        are persisted so they keep climbing across restarts. Starts at 1.
-        """
+        """Return and persist the next send counter for this recipient. Starts at 1."""
         data = self._load()
         seqs = data.setdefault("seq_send", {})
         nxt = int(seqs.get(recipient_id, 0)) + 1
@@ -171,37 +130,28 @@ class Keystore:
         return nxt
 
     def last_recv_seq(self, sender_id: str) -> Optional[int]:
-        """Highest accepted sequence number from ``sender_id``, or ``None`` if unseen."""
+        """Highest accepted seq_no from this sender, or None if first message."""
         data = self._load()
         v = data.get("seq_recv", {}).get(sender_id)
         return int(v) if v is not None else None
 
     def set_recv_seq(self, sender_id: str, seq_no: int) -> None:
-        """Record the highest accepted sequence number seen from ``sender_id``."""
         data = self._load()
         data.setdefault("seq_recv", {})[sender_id] = int(seq_no)
         self._save(data)
 
     def public_keys(self) -> dict:
-        """Return the base64-encoded public keys (no password needed)."""
+        """Return base64-encoded public keys — no password needed."""
         data = self._load()
         return {"x25519": data["pub_x25519"], "ed25519": data["pub_ed25519"]}
 
-    # --- C++ message-store archive ---------------------------------------
+    # --- C++ archive key --------------------------------------------------
 
     def archive_path(self) -> str:
-        """Path of the C++ message-store archive (a sibling of the keystore)."""
         return self.path + ".archive"
 
     def archive_key(self) -> bytes:
-        """Derive the 32-byte AES key for the C++ message-store archive.
-
-        ``HKDF-Expand(SHA256, len=32, info="zebra-msgarchive-v1")`` over the
-        in-memory KEK. Domain-separated from the KEK itself and from the
-        message-cache use, so the key handed to the external archive binary can
-        never coincide with either. Raises ``RuntimeError`` while the keystore
-        is locked (no KEK in memory).
-        """
+        """Derive a 32-byte AES key for the C++ archive via HKDF over the KEK."""
         if self._kek is None:
             raise RuntimeError("Keystore is locked — call unlock() first")
         return HKDFExpand(
@@ -211,23 +161,15 @@ class Keystore:
         ).derive(self._kek)
 
     def archive_key_hex(self) -> str:
-        """Return :meth:`archive_key` as 64 lowercase hex chars (for the binary's env)."""
         return self.archive_key().hex()
 
-    # --- decrypted-message cache -----------------------------------------
+    # --- message plaintext cache ------------------------------------------
 
     def _cache_path(self) -> str:
-        """Path of the encrypted plaintext cache (a sibling of the keystore)."""
         return self.path + ".msgcache"
 
     def _decrypt_cache(self, kek: Optional[bytes]) -> dict:
-        """Decrypt the ``{messageId: plaintext}`` cache under ``kek``.
-
-        Returns ``{}`` if there is no KEK, no cache file, or the file cannot be
-        decrypted (e.g. it was written under a different password). The cache is
-        only a display convenience — a miss just means messages are re-decrypted
-        live on the next poll.
-        """
+        """Decrypt the {messageId: plaintext} cache. Returns {} on any failure."""
         path = self._cache_path()
         if kek is None or not os.path.exists(path):
             return {}
@@ -241,23 +183,11 @@ class Keystore:
             return {}
 
     def load_message_cache(self) -> dict:
-        """Return the persisted ``{messageId: plaintext}`` cache for this session.
-
-        Decrypted under the in-memory KEK, so the keystore must be unlocked.
-        Seeding the in-memory cache from this on startup lets already-read
-        messages display after a restart WITHOUT re-running the replay check:
-        the per-sender seq counters persist, so a live re-decrypt of an old
-        message would otherwise be rejected as a replay.
-        """
+        """Load the persisted plaintext cache for this session."""
         return self._decrypt_cache(self._kek)
 
     def save_message_cache(self, cache: dict) -> None:
-        """Encrypt and persist the ``{messageId: plaintext}`` cache under the KEK.
-
-        No-op while the keystore is locked. Written atomically with owner-only
-        permissions like the keystore itself — it holds decrypted plaintext, so
-        it must never be left world-readable nor persisted in the clear.
-        """
+        """Encrypt and persist {messageId: plaintext} under the KEK."""
         if self._kek is None:
             return
         payload = json.dumps(cache).encode("utf-8")
@@ -268,7 +198,7 @@ class Keystore:
             "ciphertext": _b64e(ciphertext),
         })
 
-    # --- persistence -----------------------------------------------------
+    # --- persistence ------------------------------------------------------
 
     def _load(self) -> dict:
         with open(self.path, "r", encoding="utf-8") as f:
@@ -285,11 +215,8 @@ class Keystore:
         directory = os.path.dirname(path)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        # Atomic, owner-only write: these files hold key material / decrypted
-        # plaintext, so they must never be group/world readable nor left
-        # half-written on a crash. The temp name is unique per write so two
-        # concurrent writers (e.g. a poll persisting the message cache while a
-        # send bumps a seq counter) cannot clobber each other's temp file.
+        # Write to a unique temp file then rename atomically — safe against crashes
+        # and concurrent writes. 0o600 = owner read/write only.
         tmp = f"{path}.{os.getpid()}.{base64.urlsafe_b64encode(os.urandom(6)).decode('ascii')}.tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:

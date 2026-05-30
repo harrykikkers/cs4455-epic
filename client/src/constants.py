@@ -6,13 +6,13 @@ UI styling (colours, widget sizes) stays inline — that's normal for CTk.
 """
 
 # Dev mode bypass — must match the token the login screen injects
-DEV_MODE_TOKEN = "dev-token"
+DEV_MODE_TOKEN = "dev-token" # Bypasses encryption and networking to test how ui looks
 
-# Password policy (enforced at register and change-password)
+# Password policy (enforced in register_frame and change-password)
 MIN_PASSWORD_LENGTH = 12
 
 # Message polling cadence (milliseconds)
-POLL_INTERVAL_MS = 10_000
+POLL_INTERVAL_MS = 10_000 # Every 10 seconds main_frame.py calls _load()
 
 # Conversation list preview truncation
 PREVIEW_MAX_CHARS = 34

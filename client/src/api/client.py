@@ -26,7 +26,7 @@ class BaseClient:
                  base_url: Optional[str] = None):
         self.session = session or Session()
         self.base_url = (base_url or config.BASE_URL).rstrip("/")
-        self._http = requests.Session()
+        self._http = requests.Session() # uses the same tcp connection instead of opening a new one each time
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         url = f"{self.base_url}{path}"
@@ -41,15 +41,15 @@ class BaseClient:
             )
         except requests.RequestException as exc:
             raise NetworkError(str(exc)) from exc
-
+        # resp.ok is True for any 2xx status codes
         if not resp.ok:
             raise exception_for_status(resp.status_code)(self._error_message(resp))
 
         if resp.content:
-            return resp.json()
+            return resp.json() # parse and return as a dict - 204 No Content returns None
         return None
 
-    @staticmethod
+    @staticmethod  # doesn't use self — no instance state needed
     def _error_message(resp: requests.Response) -> str:
         try:
             return resp.json().get("error", {}).get("message", resp.text)

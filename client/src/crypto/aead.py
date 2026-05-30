@@ -24,9 +24,9 @@ def encrypt(key: bytes, plaintext: bytes, aad: bytes) -> tuple[bytes, bytes]:
     GCM authentication tag appended by the library.
     """
     if len(key) != 32:
-        raise ValueError(f"Key must be 32 bytes, got {len(key)}")
-    nonce = os.urandom(12)
-    ciphertext = AESGCM(key).encrypt(nonce, plaintext, aad)
+        raise ValueError(f"Key must be 32 bytes, got {len(key)}") # required by aes-256
+    nonce = os.urandom(12) # cryptographically secure random nonce 
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext, aad) # the aad is important to know if the tag is valid
     return nonce, ciphertext
 
 
@@ -34,4 +34,4 @@ def decrypt(key: bytes, nonce: bytes, ciphertext: bytes, aad: bytes) -> bytes:
     """Decrypt and verify.  Raises ``InvalidTag`` if anything was tampered with."""
     if len(key) != 32:
         raise ValueError(f"Key must be 32 bytes, got {len(key)}")
-    return AESGCM(key).decrypt(nonce, ciphertext, aad)
+    return AESGCM(key).decrypt(nonce, ciphertext, aad) # if the aad is  wrong, InvalidTag is raised

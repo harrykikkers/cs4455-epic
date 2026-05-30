@@ -31,15 +31,16 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 
 
 def _argon2id(password: str, salt: bytes) -> bytes:
-    """Argon2id over a password with OWASP-recommended parameters (RFC 9106)."""
+    """Argon2id over a password with OWASP-recommended parameters (RFC 9106).
+    These are the minimum recommended values for interactive logins."""
     return hash_secret_raw(
-        secret=password.encode("utf-8"),
-        salt=salt,
-        time_cost=2,
-        memory_cost=19456,
-        parallelism=1,
-        hash_len=32,
-        type=Type.ID,
+        secret=password.encode("utf-8"), # convert the password string to bytes
+        salt=salt, # random bytes fed in
+        time_cost=2, # runs algorithim 2 times
+        memory_cost=19456, # increases the cost of brute force attacks
+        parallelism=1, # uses a single thread
+        hash_len=32, # output length in bytes
+        type=Type.ID, # resists both side-channel and GPU attacks
     )
 
 

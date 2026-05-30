@@ -17,12 +17,13 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     PublicFormat,
 )
-
+# Ed25519 - a digital signature algorithm based on elliptic curves
 
 def generate_keypair() -> tuple[bytes, bytes]:
     """Return ``(private_key_bytes, public_key_bytes)``, each 32 bytes."""
     priv = Ed25519PrivateKey.generate()
     priv_bytes = priv.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+    # We handle encryption ourselves in keystore.py - NoEncryption() just gives us the raw private key bytes
     pub_bytes = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     return priv_bytes, pub_bytes
 
