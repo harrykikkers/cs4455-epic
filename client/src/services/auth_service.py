@@ -1,50 +1,79 @@
 """Authentication orchestration — register, login, password change.
 
-Composes :class:`~secure_messenger_client.api.auth.AuthAPI` with the crypto
-layer (key generation, KEK derivation) and the keystore. The network parts
-are wired up; the crypto parts are flagged with TODOs.
+Composes :class:`~api.auth.AuthAPI` with the crypto layer (keystore key
+generation + KEK unlock) and :class:`~services.key_service.KeyService`. This is
+the single code path for auth: register generates the local keystore, login
+unlocks it and publishes the public keys. The UI frames call these methods
+rather than talking to the server directly.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from api.auth import AuthAPI
 from crypto.kdf import derive_auth_hash
+from crypto.keystore import Keystore
+from services.key_service import KeyService
 from session import Session
 
 
 class AuthService:
     def __init__(self, api: Optional[AuthAPI] = None,
-                 session: Optional[Session] = None):
+                 session: Optional[Session] = None,
+                 keystore: Optional[Keystore] = None,
+                 key_service: Optional[KeyService] = None):
         self.session = session or Session()
         self.api = api or AuthAPI(self.session)
+        self.keystore = keystore or Keystore()
+        self.key_svc = key_service or KeyService(
+            session=self.session, keystore=self.keystore)
 
-    def login(self, username: str, password: str) -> None:
-        """Authenticate and populate the session.
+    def login(self, username: str, password: str) -> dict:
+        """Authenticate, unlock the local keystore, and publish public keys.
 
-        Sends the Argon2id pre-hash of the password (``derive_auth_hash``)
-        rather than the cleartext, so the server never sees the plaintext.
+        The password is used two independent, domain-separated ways: the
+        Argon2id pre-hash (``derive_auth_hash``) is sent to the server as the
+        credential, while the *cleartext* password derives the local KEK that
+        unlocks the keystore — the cleartext never leaves the device.
 
-        TODO: unlock the local keystore with a KEK derived from the
-        *cleartext* ``password`` (``crypto.kdf.derive_kek``) — not the auth
-        hash — so private keys are available for the session.
+        On first login the keystore is created (this happens at register, so the
+        create path here is only a fallback). Once unlocked, the X25519 +
+        Ed25519 public keys are published so peers can reach this user. Returns
+        the server ``data`` block (token + user) and leaves it on ``self.session``.
         """
         data = self.api.login(username, derive_auth_hash(password, username))["data"]
         self.session.set(data["token"], data["user"]["userId"],
                          data["user"]["username"])
 
+        if self.keystore.exists():
+            self.keystore.unlock(password)
+        else:
+            self.keystore.create(password)
+            self.keystore.unlock(password)
+
+        self.key_svc.publish_own_keys()
+        return data
+
     def register(self, username: str, password: str):
-        """Register a new account.
+        """Register a new account and generate the local keystore.
 
-        Sends the Argon2id pre-hash of the password (``derive_auth_hash``);
-        the server salts and re-hashes it before storage.
+        Sends the Argon2id pre-hash (``derive_auth_hash``); the server salts and
+        re-hashes it before storage. On success, generates the X25519 + Ed25519
+        keypairs and stores the private keys encrypted under a KEK derived from
+        the *cleartext* password. Public keys are published later, at first
+        login, which is where the JWT needed to authenticate ``POST /api/keys``
+        first becomes available.
 
-        TODO: generate X25519 + Ed25519 keypairs, encrypt the private keys
-        under a KEK derived from the *cleartext* ``password`` into the
-        keystore, and publish the public keys via ``KeyService``.
+        A pre-existing keystore at the configured path is replaced — registering
+        a new account starts a fresh local identity on this machine.
         """
-        return self.api.register(username, derive_auth_hash(password, username))
+        resp = self.api.register(username, derive_auth_hash(password, username))
+        if self.keystore.exists():
+            os.remove(self.keystore.path)
+        self.keystore.create(password)
+        return resp
 
     def change_password(self, current: str, new: str, keystore=None):
         """Change the account password.

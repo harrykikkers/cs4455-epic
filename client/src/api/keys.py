@@ -1,8 +1,8 @@
 """Wrappers for /api/keys/* endpoints.
 
-Payload field names are best-effort until the key-publish flow is built
-client-side (the GUI does not exercise these yet); adjust to match the
-backend contract when wiring up ``KeyService``.
+Driven by :class:`~services.key_service.KeyService`: ``AuthService.login``
+publishes the user's public keys via ``publish`` on every login, and the
+message pipeline fetches + pins peer keys via ``get`` / ``history``.
 """
 
 from __future__ import annotations

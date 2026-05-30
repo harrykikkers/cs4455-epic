@@ -1,11 +1,9 @@
 import threading
-import requests
 import customtkinter as ctk
 
-from config import BASE_URL, VERIFY_SSL
 from constants import DEV_MODE_TOKEN
-from crypto.kdf import derive_auth_hash
-from crypto.keystore import Keystore
+from errors import NetworkError
+from services.auth_service import AuthService
 
 
 class LoginFrame(ctk.CTkFrame):
@@ -56,34 +54,17 @@ class LoginFrame(ctk.CTkFrame):
 
         def run():
             try:
-                resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-                    "username": user,
-                    "password": derive_auth_hash(pw, user),
-                }, verify=VERIFY_SSL)
-                resp.raise_for_status()
-                data = resp.json()["data"]
+                # AuthService logs in, unlocks the local keystore with the
+                # cleartext password, and publishes this user's public keys.
+                auth = AuthService()
+                data = auth.login(user, pw)
                 self.app.token    = data["token"]
                 self.app.user_id  = data["user"]["userId"]
                 self.app.username = data["user"]["username"]
-
-                # Unlock (or create) the local keystore and publish public keys.
-                ks = Keystore()
-                if not ks.exists():
-                    ks.create(pw)
-                else:
-                    ks.unlock(pw)
-                self.app.keystore = ks
-                hdrs = {"Authorization": f"Bearer {self.app.token}"}
-                pub = ks.public_keys()
-                for key_type in ("x25519", "ed25519"):
-                    requests.post(f"{BASE_URL}/api/keys", json={
-                        "publicKey": pub[key_type],
-                        "keyType": key_type,
-                        "acknowledgeRotation": True,
-                    }, headers=hdrs, verify=VERIFY_SSL)
+                self.app.keystore = auth.keystore
 
                 self.app.after(0, self.app._show_main)
-            except requests.exceptions.ConnectionError:
+            except NetworkError:
                 self.app.after(0, lambda: self.status.configure(
                     text="Cannot connect — is the backend running?"))
             except Exception:

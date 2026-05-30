@@ -1,11 +1,9 @@
 import threading
-import requests
 import customtkinter as ctk
 
-from config import BASE_URL, VERIFY_SSL
 from constants import MIN_PASSWORD_LENGTH
-from crypto.kdf import derive_auth_hash
-from crypto.keystore import Keystore
+from errors import ConflictError, NetworkError, ValidationError
+from services.auth_service import AuthService
 
 
 class RegisterFrame(ctk.CTkFrame):
@@ -97,41 +95,32 @@ class RegisterFrame(ctk.CTkFrame):
                                self._progress_bar.set(v))
                 time.sleep(0.4)
 
-            try:
-                resp = requests.post(f"{BASE_URL}/api/auth/register", json={
-                    "username": user,
-                    "password": derive_auth_hash(pw, user),
-                }, verify=VERIFY_SSL)
-                resp.raise_for_status()
+            def fail(msg):
+                self.app.after(0, lambda: self._set_status(msg))
+                self.app.after(0, self._hide_progress)
+                self.app.after(0, lambda: self._register_btn.configure(
+                    state="normal"))
 
+            try:
+                # AuthService registers with the server, then generates the
+                # local keystore (X25519 + Ed25519, private keys KEK-encrypted).
                 self.app.after(0, lambda: self._show_progress("Generating keypairs..."))
-                ks = Keystore()
-                if ks.exists():
-                    import os; os.remove(ks.path)
-                ks.create(pw)
-                self.app.keystore = ks
+                auth = AuthService()
+                auth.register(user, pw)
+                self.app.keystore = auth.keystore
 
                 self.app.after(0, lambda: self._show_progress(
                     "Account created! Redirecting to login..."))
                 time.sleep(0.8)
                 self.app.after(0, self.app._show_login)
 
-            except requests.exceptions.ConnectionError:
-                self.app.after(0, lambda: self._set_status(
-                    "Cannot connect — is the backend running?"))
-                self.app.after(0, self._hide_progress)
-                self.app.after(0, lambda: self._register_btn.configure(
-                    state="normal"))
-            except requests.exceptions.HTTPError as e:
-                msg = e.response.json().get("error", {}).get("message", str(e))
-                self.app.after(0, lambda m=msg: self._set_status(m))
-                self.app.after(0, self._hide_progress)
-                self.app.after(0, lambda: self._register_btn.configure(
-                    state="normal"))
+            except NetworkError:
+                fail("Cannot connect — is the backend running?")
+            except ConflictError:
+                fail("That username is already taken.")
+            except ValidationError as e:
+                fail(str(e) or "Registration was rejected by the server.")
             except Exception as e:
-                self.app.after(0, lambda m=str(e): self._set_status(m))
-                self.app.after(0, self._hide_progress)
-                self.app.after(0, lambda: self._register_btn.configure(
-                    state="normal"))
+                fail(str(e))
 
         threading.Thread(target=run, daemon=True).start()
