@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Message Verification — Sepolia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f6f6f3;
+    --surface: #ffffff;
+    --surface-2: #fafaf8;
+    --border: #e7e7e1;
+    --border-strong: #d6d6cf;
+    --text: #1a1a17;
+    --muted: #74746c;
+    --faint: #9b9b92;
+    --accent: #ea580c;
+    --accent-weak: rgba(234, 88, 12, 0.10);
+    --accent-line: rgba(234, 88, 12, 0.28);
+    --pass: #15803d;
+    --pass-bg: rgba(21, 128, 61, 0.08);
+    --pass-line: rgba(21, 128, 61, 0.30);
+    --fail: #c0271b;
+    --fail-bg: rgba(192, 39, 27, 0.07);
+    --fail-line: rgba(192, 39, 27, 0.28);
+    --shadow: 0 1px 2px rgba(20, 20, 18, 0.04), 0 8px 28px rgba(20, 20, 18, 0.05);
+    color-scheme: light;
+  }
+  [data-theme="dark"] {
+    --bg: #0b0b0c;
+    --surface: #161618;
+    --surface-2: #1c1c1f;
+    --border: #2a2a2e;
+    --border-strong: #3a3a40;
+    --text: #f3f3ef;
+    --muted: #9c9c94;
+    --faint: #6f6f68;
+    --accent: #f97316;
+    --accent-weak: rgba(249, 115, 22, 0.13);
+    --accent-line: rgba(249, 115, 22, 0.40);
+    --pass: #56d68b;
+    --pass-bg: rgba(86, 214, 139, 0.10);
+    --pass-line: rgba(86, 214, 139, 0.32);
+    --fail: #f97066;
+    --fail-bg: rgba(249, 112, 102, 0.10);
+    --fail-line: rgba(249, 112, 102, 0.32);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 40px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    transition: background 0.25s ease, color 0.25s ease;
+  }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 28px 96px; }
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; margin-bottom: 40px;
+  }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .glyph {
+    width: 30px; height: 30px; border-radius: 7px; flex: none;
+    border: 1.5px solid var(--accent);
+    display: grid; place-items: center;
+    color: var(--accent);
+  }
+  .kicker {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); font-weight: 500;
+  }
+  .net-status { display: flex; align-items: center; gap: 7px; margin-top: 2px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.live { background: var(--pass); box-shadow: 0 0 0 0 var(--pass-line); animation: pulse 2.4s infinite; }
+  .dot.err { background: var(--fail); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 var(--pass-line); }
+    70% { box-shadow: 0 0 0 6px rgba(0,0,0,0); }
+    100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+  }
+  .net-text { font-size: 11.5px; color: var(--muted); }
+
+  .theme-toggle {
+    appearance: none; border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--muted); width: 36px; height: 36px; border-radius: 9px; cursor: pointer;
+    display: grid; place-items: center; transition: all 0.18s ease;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--accent-line); }
+  .theme-toggle svg { width: 17px; height: 17px; }
+  [data-theme="light"] .ic-moon { display: block; }
+  [data-theme="light"] .ic-sun { display: none; }
+  [data-theme="dark"] .ic-moon { display: none; }
+  [data-theme="dark"] .ic-sun { display: block; }
+
+  /* ---------- header ---------- */
+  header.intro { margin-bottom: 30px; }
+  h1 {
+    font-size: 34px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1;
+    margin-bottom: 12px;
+  }
+  .lede { font-size: 15.5px; color: var(--muted); max-width: 60ch; text-wrap: pretty; }
+
+  /* ---------- contract strip ---------- */
+  .contract-strip {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px;
+    padding: 11px 14px; margin-bottom: 26px;
+    border: 1px solid var(--border); border-radius: 11px; background: var(--surface-2);
+    font-size: 12px;
+  }
+  .badge {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 500;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 5px; background: var(--accent-weak); color: var(--accent);
+    border: 1px solid var(--accent-line);
+  }
+  .strip-item { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .strip-item .mono { color: var(--text); }
+  .strip-sep { width: 1px; height: 14px; background: var(--border-strong); }
+  .linkish { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--border-strong); cursor: pointer; }
+  .linkish:hover { color: var(--accent); border-color: var(--accent-line); }
+
+  /* ---------- card ---------- */
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .step { padding: 24px 26px; }
+  .step + .step { border-top: 1px solid var(--border); }
+
+  .step-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 13px; }
+  .step-no {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 600;
+    color: var(--accent); flex: none;
+  }
+  .step-label { font-size: 13.5px; font-weight: 600; }
+  .step-hint { font-size: 12px; color: var(--faint); margin-left: auto; }
+
+  textarea, input.txhash {
+    width: 100%; background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: 10px;
+    font-family: "IBM Plex Mono", monospace; font-size: 13px; line-height: 1.6;
+    padding: 13px 14px; resize: vertical; transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  textarea { min-height: 122px; }
+  input.txhash { font-size: 12.5px; }
+  textarea:focus, input.txhash:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak);
+  }
+  ::placeholder { color: var(--faint); }
+
+  /* live fingerprint */
+  .fingerprint {
+    display: flex; align-items: center; gap: 10px; margin-top: 12px;
+    font-size: 11px; color: var(--muted);
+  }
+  .fingerprint .label { letter-spacing: 0.08em; text-transform: uppercase; font-weight: 500; flex: none; }
+  .fp-hash {
+    font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--text);
+    word-break: break-all; line-height: 1.45;
+  }
+  .fp-hash.empty { color: var(--faint); }
+
+  .copy-btn {
+    appearance: none; border: 1px solid var(--border-strong); background: transparent;
+    color: var(--muted); border-radius: 6px; padding: 2px 7px; font-size: 10.5px; cursor: pointer;
+    font-family: "IBM Plex Mono", monospace; flex: none; transition: all 0.15s ease;
+  }
+  .copy-btn:hover { color: var(--accent); border-color: var(--accent-line); }
+
+  /* ---------- actions ---------- */
+  .actions {
+    display: flex; align-items: center; gap: 14px;
+    padding: 20px 26px; border-top: 1px solid var(--border); background: var(--surface-2);
+  }
+  .btn-verify {
+    appearance: none; border: none; cursor: pointer;
+    background: var(--accent); color: #fff; font-weight: 600; font-size: 14px;
+    font-family: inherit; padding: 11px 22px; border-radius: 10px;
+    display: inline-flex; align-items: center; gap: 9px;
+    transition: filter 0.15s ease, transform 0.05s ease;
+  }
+  .btn-verify:hover { filter: brightness(1.07); }
+  .btn-verify:active { transform: translateY(1px); }
+  .btn-verify:disabled { opacity: 0.6; cursor: progress; }
+  .spinner {
+    width: 15px; height: 15px; border: 2px solid rgba(255,255,255,0.4);
+    border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; display: none;
+  }
+  .btn-verify.loading .spinner { display: inline-block; }
+  .btn-verify.loading .v-icon { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .demo-link { font-size: 12.5px; color: var(--muted); margin-left: auto; }
+  .demo-link a { color: var(--accent); text-decoration: none; cursor: pointer; font-weight: 500; }
+  .demo-link a:hover { text-decoration: underline; }
+
+  /* ---------- result ---------- */
+  #result { margin-top: 22px; }
+  .result-card {
+    border-radius: 16px; border: 1px solid var(--border); overflow: hidden;
+    box-shadow: var(--shadow); background: var(--surface);
+    animation: rise 0.3s cubic-bezier(0.2,0.7,0.2,1);
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .verdict {
+    display: flex; align-items: center; gap: 15px; padding: 22px 26px;
+    border-bottom: 1px solid var(--border);
+  }
+  .verdict.pass { background: var(--pass-bg); border-color: var(--pass-line); }
+  .verdict.fail { background: var(--fail-bg); border-color: var(--fail-line); }
+  .verdict.err  { background: var(--surface-2); }
+  .verdict-icon { width: 42px; height: 42px; border-radius: 50%; flex: none; display: grid; place-items: center; }
+  .verdict.pass .verdict-icon { background: var(--pass); color: #fff; }
+  .verdict.fail .verdict-icon { background: var(--fail); color: #fff; }
+  .verdict.err  .verdict-icon { background: var(--border-strong); color: var(--text); }
+  .verdict-icon svg { width: 22px; height: 22px; }
+  .verdict-title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+  .verdict.pass .verdict-title { color: var(--pass); }
+  .verdict.fail .verdict-title { color: var(--fail); }
+  .verdict-sub { font-size: 13px; color: var(--muted); margin-top: 1px; }
+  .demo-tag {
+    margin-left: auto; align-self: flex-start; font-family: "IBM Plex Mono", monospace;
+    font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600;
+    padding: 3px 7px; border-radius: 5px; color: var(--muted);
+    border: 1px dashed var(--border-strong);
+  }
+
+  .fields { padding: 6px 26px 22px; }
+  .field { display: flex; flex-direction: column; gap: 4px; padding: 13px 0; border-bottom: 1px solid var(--border); }
+  .field:last-child { border-bottom: none; }
+  .field-k { font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  .field-v { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--text); word-break: break-all; line-height: 1.5; }
+  .field-v.hl-pass { color: var(--pass); }
+  .field-v.hl-fail { color: var(--fail); }
+  .field-v a { color: var(--accent); text-decoration: none; }
+  .field-v a:hover { text-decoration: underline; }
+  .hash-row { display: flex; align-items: flex-start; gap: 9px; }
+
+  /* digest comparison block */
+  .compare { padding: 4px 26px 8px; }
+  .compare-row { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .compare-row:last-child { border-bottom: none; }
+  .compare-k { font-size: 11px; color: var(--muted); padding-top: 2px; }
+  .compare-v { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; word-break: break-all; line-height: 1.5; }
+
+  /* ---------- explainer ---------- */
+  details.explain {
+    margin-top: 26px; border: 1px solid var(--border); border-radius: 13px;
+    background: var(--surface-2); overflow: hidden;
+  }
+  details.explain > summary {
+    list-style: none; cursor: pointer; padding: 15px 20px; display: flex; align-items: center; gap: 10px;
+    font-size: 13.5px; font-weight: 600; color: var(--text);
+  }
+  details.explain > summary::-webkit-details-marker { display: none; }
+  .chev { width: 15px; height: 15px; color: var(--muted); transition: transform 0.2s ease; margin-left: auto; }
+  details.explain[open] .chev { transform: rotate(90deg); }
+  .explain-body { padding: 4px 20px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px 24px; }
+  .ex-item h4 { font-size: 12.5px; font-weight: 600; margin-bottom: 5px; display: flex; align-items: center; gap: 7px; }
+  .ex-item h4 .num { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-size: 11px; }
+  .ex-item p { font-size: 12.5px; color: var(--muted); line-height: 1.55; text-wrap: pretty; }
+  .ex-item code { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--text); background: var(--accent-weak); padding: 1px 4px; border-radius: 4px; }
+
+  footer.foot { margin-top: 32px; font-size: 11.5px; color: var(--faint); text-align: center; line-height: 1.7; }
+  footer.foot a { color: var(--muted); }
+
+  .toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: var(--bg); font-size: 12.5px; font-weight: 500;
+    padding: 9px 16px; border-radius: 9px; opacity: 0; pointer-events: none;
+    transition: all 0.22s ease; z-index: 50;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 620px) {
+    .wrap { padding: 28px 18px 72px; }
+    h1 { font-size: 27px; }
+    .explain-body { grid-template-columns: 1fr; }
+    .compare-row { grid-template-columns: 1fr; gap: 3px; }
+    .step-hint { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+
+    <!-- top bar -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>
+        </div>
+        <div>
+          <div class="kicker">Message Integrity Registry</div>
+          <div class="net-status">
+            <span class="dot" id="netDot"></span>
+            <span class="net-text mono" id="netText">connecting to Sepolia…</span>
+          </div>
+        </div>
+      </div>
+      <button class="theme-toggle" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">
+        <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>
+        <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+    </div>
+
+    <!-- header -->
+    <header class="intro">
+      <h1>Message Proof</h1>
+      <p class="lede">Verify that a message has not been altered since it was anchored on-chain. Paste the original content and the recording transaction — the page recomputes its <span class="mono">keccak256</span> digest and compares it against the immutable, timestamped record on the Ethereum Sepolia testnet.</p>
+    </header>
+
+    <!-- contract reference -->
+    <div class="contract-strip">
+      <span class="badge">Sepolia</span>
+      <div class="strip-item">contract <span class="mono" id="contractAddr">—</span>
+        <button class="copy-btn" data-copy="contract">copy</button>
+      </div>
+      <div class="strip-sep"></div>
+      <a class="linkish" id="etherscanContract" target="_blank" rel="noopener">view on Etherscan ↗</a>
+      <div class="strip-sep"></div>
+      <span class="linkish" data-copy="abi">copy ABI</span>
+    </div>
+
+    <!-- main card -->
+    <div class="card">
+      <div class="step">
+        <div class="step-head">
+          <span class="step-no">01</span>
+          <span class="step-label">Original message content</span>
+          <span class="step-hint">recomputed locally — never uploaded</span>
+        </div>
+        <textarea id="content" spellcheck="false" placeholder="Paste the exact original message or conversation segment here…"></textarea>
+        <div class="fingerprint">
+          <span class="label">keccak256</span>
+          <span class="fp-hash empty mono" id="fpHash">—</span>
+          <button class="copy-btn" data-copy="fp">copy</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-head">
+          <span class="step-no">02</span>
+          <span class="step-label">Recording transaction hash</span>
+          <span class="step-hint">the Sepolia tx that anchored the digest</span>
+        </div>
+        <input class="txhash mono" id="txhash" spellcheck="false" placeholder="0x… (66-character transaction hash)" />
+      </div>
+
+      <div class="actions">
+        <button class="btn-verify" id="verifyBtn">
+          <span class="spinner"></span>
+          <svg class="v-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>
+          <span class="btn-text">Verify</span>
+        </button>
+        <span class="demo-link">No transaction handy? <a id="demoLink">Load a demo record →</a></span>
+      </div>
+    </div>
+
+    <!-- result -->
+    <div id="result"></div>
+
+    <footer class="foot">
+      Read-only verifier · queries public Sepolia RPC via ethers.js · no wallet required<br/>
+      Reference contract <span class="mono">MessageDigest.sol</span> · keccak256(bytes) digests
+    </footer>
+  </div>
+
+  <div class="toast" id="toast">Copied</div>
+
+  <script type="module">
+    import { ethers } from "https://esm.sh/ethers@6.13.4";
+
+    // ---------- config ----------
+    // Replace with YOUR deployed address after deploying MessageDigest.sol to
+    // Sepolia (contracts/DEPLOY.md). Keep in sync with
+    // contracts/deployments/sepolia.json and backend/.env CONTRACT_ADDRESS.
+    const CONTRACT_ADDRESS = "0x8F3aB2c1E9d4F60a7B2c5D8e1A4f7B0c3D6e9A2b";
+    const RPC_URLS = [
+      "https://ethereum-sepolia-rpc.publicnode.com",
+      "https://1rpc.io/sepolia",
+      "https://rpc.sepolia.org",
+    ];
+    // ABI mirrors contracts/src/MessageDigest.sol — the contract the backend
+    // actually writes to (BlockchainService.recordHash).
+    const ABI = [
+      "function recordHash(bytes32 digest)",
+      "function getRecord(bytes32 digest) view returns (uint256 timestamp, address recorder)",
+      "event HashRecorded(bytes32 indexed digest, uint256 timestamp, address indexed recorder)",
+    ];
+    const iface = new ethers.Interface(ABI);
+
+    // ---------- demo record (self-contained, clearly labelled) ----------
+    const DEMO_TX = "0xdem0000000000000000000000000000000000000000000000000000000000aa1";
+    const DEMO_CONTENT =
+`Conversation segment #042 — anchored 2026-05-29
+[10:14] Alice: Wire the Q3 payout to account ending 8841.
+[10:15] Bob: Confirmed — 142,500 USDC, releasing now.
+[10:16] Alice: Reference INV-2026-0412. Thanks.`;
+    const DEMO_RECORD = {
+      digest: ethers.keccak256(ethers.toUtf8Bytes(DEMO_CONTENT)),
+      timestamp: 1780049655,            // unix seconds — 2026-05-29 10:14:15 UTC
+      block: 10961284,
+      recorder: "0x4D7e1F0a9C2b6E83a51D0F4c7B2e9A6d8C3f1B05",
+      contract: CONTRACT_ADDRESS,
+    };
+
+    // ---------- dom ----------
+    const $ = (id) => document.getElementById(id);
+    const contentEl = $("content"), txEl = $("txhash"), fpEl = $("fpHash");
+    const verifyBtn = $("verifyBtn"), resultEl = $("result");
+    const netDot = $("netDot"), netText = $("netText");
+
+    // ---------- theme ----------
+    const root = document.documentElement;
+    const savedTheme = localStorage.getItem("mfp.theme");
+    if (savedTheme) root.setAttribute("data-theme", savedTheme);
+    $("themeBtn").addEventListener("click", () => {
+      const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      localStorage.setItem("mfp.theme", next);
+    });
+
+    // ---------- contract strip ----------
+    const shortAddr = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+    $("contractAddr").textContent = shortAddr(CONTRACT_ADDRESS);
+    $("etherscanContract").href = "https://sepolia.etherscan.io/address/" + CONTRACT_ADDRESS;
+
+    // ---------- toast + copy ----------
+    let toastT;
+    function toast(msg) {
+      const t = $("toast"); t.textContent = msg; t.classList.add("show");
+      clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 1400);
+    }
+    document.addEventListener("click", (e) => {
+      const el = e.target.closest("[data-copy]"); if (!el) return;
+      const kind = el.getAttribute("data-copy");
+      let text = "";
+      if (kind === "contract") text = CONTRACT_ADDRESS;
+      else if (kind === "abi") text = JSON.stringify(ABI, null, 2);
+      else if (kind === "fp") text = fpEl.dataset.full || "";
+      else text = el.dataset.copyValue || "";
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => toast("Copied " + (kind === "abi" ? "ABI" : kind === "contract" ? "address" : "hash")));
+    });
+
+    // ---------- live fingerprint ----------
+    function updateFingerprint() {
+      const v = contentEl.value;
+      if (!v.length) {
+        fpEl.textContent = "—"; fpEl.classList.add("empty"); fpEl.dataset.full = "";
+        return;
+      }
+      const h = ethers.keccak256(ethers.toUtf8Bytes(v));
+      fpEl.textContent = h; fpEl.classList.remove("empty"); fpEl.dataset.full = h;
+      localStorage.setItem("mfp.content", v);
+    }
+    contentEl.addEventListener("input", updateFingerprint);
+    txEl.addEventListener("input", () => localStorage.setItem("mfp.tx", txEl.value));
+    // restore
+    contentEl.value = localStorage.getItem("mfp.content") || "";
+    txEl.value = localStorage.getItem("mfp.tx") || "";
+    updateFingerprint();
+
+    // ---------- provider (with fallback) ----------
+    let provider = null;
+    async function getProvider() {
+      if (provider) return provider;
+      for (const url of RPC_URLS) {
+        try {
+          const p = new ethers.JsonRpcProvider(url, { chainId: 11155111, name: "sepolia" }, { staticNetwork: true });
+          await p.getBlockNumber();
+          provider = p; return p;
+        } catch (_) { /* try next */ }
+      }
+      throw new Error("Unable to reach any Sepolia RPC endpoint.");
+    }
+    (async () => {
+      try {
+        const p = await getProvider();
+        const bn = await p.getBlockNumber();
+        netDot.className = "dot live";
+        netText.textContent = "Sepolia · connected · block " + bn.toLocaleString();
+      } catch (e) {
+        netDot.className = "dot err";
+        netText.textContent = "Sepolia RPC unreachable";
+      }
+    })();
+
+    // ---------- helpers ----------
+    function fmtTime(unix) {
+      const d = new Date(unix * 1000);
+      const utc = d.toISOString().replace("T", " ").replace(".000Z", " UTC");
+      const diff = Date.now() / 1000 - unix;
+      let rel;
+      const day = 86400;
+      if (diff < 60) rel = Math.floor(diff) + "s ago";
+      else if (diff < 3600) rel = Math.floor(diff / 60) + "m ago";
+      else if (diff < day) rel = Math.floor(diff / 3600) + "h ago";
+      else rel = Math.floor(diff / day) + "d ago";
+      return { utc, rel };
+    }
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+    function setLoading(on) {
+      verifyBtn.classList.toggle("loading", on);
+      verifyBtn.disabled = on;
+      verifyBtn.querySelector(".btn-text").textContent = on ? "Querying chain…" : "Verify";
+    }
+
+    // ---------- result renderers ----------
+    function iconCheck() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg>'; }
+    function iconX() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>'; }
+    function iconAlert() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>'; }
+
+    function renderError(title, sub) {
+      resultEl.innerHTML = `
+        <div class="result-card">
+          <div class="verdict err">
+            <div class="verdict-icon">${iconAlert()}</div>
+            <div>
+              <div class="verdict-title">${esc(title)}</div>
+              <div class="verdict-sub">${esc(sub)}</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function renderResult({ match, computed, onchain, timestamp, block, recorder, contract, txHash, demo }) {
+      const t = fmtTime(timestamp);
+      const txLink = demo ? "#" : "https://sepolia.etherscan.io/tx/" + txHash;
+      const verdictClass = match ? "pass" : "fail";
+      const icon = match ? iconCheck() : iconX();
+      const title = match ? "Integrity verified" : "Verification failed";
+      const sub = match
+        ? "The supplied content matches the digest anchored on-chain."
+        : "The content does not match the anchored digest — it may have been altered.";
+
+      resultEl.innerHTML = `
+        <div class="result-card">
+          <div class="verdict ${verdictClass}">
+            <div class="verdict-icon">${icon}</div>
+            <div>
+              <div class="verdict-title">${title}</div>
+              <div class="verdict-sub">${sub}</div>
+            </div>
+            ${demo ? '<span class="demo-tag">demo · simulated record</span>' : ''}
+          </div>
+
+          <div class="compare">
+            <div class="compare-row">
+              <div class="compare-k">Computed digest</div>
+              <div class="compare-v ${match ? 'hl-pass' : 'hl-fail'}" style="color:var(--${match ? 'pass' : 'fail'})">${computed}</div>
+            </div>
+            <div class="compare-row">
+              <div class="compare-k">On-chain digest</div>
+              <div class="compare-v" style="color:var(--${match ? 'pass' : 'fail'})">${onchain}</div>
+            </div>
+          </div>
+
+          <div class="fields">
+            <div class="field">
+              <div class="field-k">Recorded timestamp</div>
+              <div class="field-v">${t.utc} &nbsp;·&nbsp; <span style="color:var(--muted)">${t.rel}</span> &nbsp;·&nbsp; <span style="color:var(--muted)">unix ${timestamp}</span></div>
+            </div>
+            <div class="field">
+              <div class="field-k">Block</div>
+              <div class="field-v">#${block.toLocaleString()}</div>
+            </div>
+            <div class="field">
+              <div class="field-k">Recorder</div>
+              <div class="field-v">${recorder}</div>
+            </div>
+            <div class="field">
+              <div class="field-k">Registry contract</div>
+              <div class="field-v">${contract}</div>
+            </div>
+            <div class="field">
+              <div class="field-k">Transaction</div>
+              <div class="field-v">${demo ? '<span style="color:var(--muted)">' + txHash + ' (simulated)</span>' : '<a href="' + txLink + '" target="_blank" rel="noopener">' + txHash + ' ↗</a>'}</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // ---------- verify ----------
+    async function verify() {
+      const content = contentEl.value;
+      const txHash = txEl.value.trim();
+
+      if (!content.length) { renderError("No content provided", "Paste the original message content in step 01 to compute its digest."); return; }
+      if (!txHash) { renderError("No transaction hash", "Enter the Sepolia transaction that anchored this digest in step 02."); return; }
+
+      const computed = ethers.keccak256(ethers.toUtf8Bytes(content));
+
+      // ----- demo path -----
+      if (txHash.toLowerCase() === DEMO_TX) {
+        const match = computed.toLowerCase() === DEMO_RECORD.digest.toLowerCase();
+        renderResult({
+          match, computed, onchain: DEMO_RECORD.digest, timestamp: DEMO_RECORD.timestamp,
+          block: DEMO_RECORD.block, recorder: DEMO_RECORD.recorder, contract: DEMO_RECORD.contract,
+          txHash: DEMO_TX, demo: true,
+        });
+        return;
+      }
+
+      // ----- live path -----
+      if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+        renderError("Malformed transaction hash", "A Sepolia transaction hash is 0x followed by 64 hexadecimal characters.");
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const p = await getProvider();
+        const tx = await p.getTransaction(txHash);
+        if (!tx) { renderError("Transaction not found", "No such transaction on Sepolia. Check the hash, or it may still be pending."); return; }
+        if (!tx.blockNumber) { renderError("Transaction still pending", "This transaction has not been mined yet. Wait for confirmation and try again."); return; }
+
+        // Decode the digest from the HashRecorded event log. We pin to the
+        // registry contract address so a look-alike event from some other
+        // contract can't be passed off as a valid anchor.
+        const pinned = CONTRACT_ADDRESS.toLowerCase();
+        let onchain = null, recorder = tx.from, contract = tx.to, foreignEvent = false;
+        const receipt = await p.getTransactionReceipt(txHash);
+        if (receipt) {
+          for (const log of receipt.logs) {
+            let ev;
+            try { ev = iface.parseLog(log); } catch (_) { continue; }
+            if (!ev || ev.name !== "HashRecorded") continue;
+            if (log.address.toLowerCase() !== pinned) { foreignEvent = true; continue; }
+            onchain = ev.args.digest; recorder = ev.args.recorder; contract = log.address;
+            break;
+          }
+        }
+        if (onchain === null) {
+          if (foreignEvent) {
+            renderError("Recorded by a different contract", "This transaction emitted a HashRecorded event, but not from the configured registry contract. Confirm CONTRACT_ADDRESS matches your deployment.");
+          } else {
+            renderError("No digest found in this transaction", "This transaction did not emit a HashRecorded event on the registry. Check that the hash came from GET /api/messages/:id/chain.");
+          }
+          return;
+        }
+
+        const block = await p.getBlock(tx.blockNumber);
+        const match = computed.toLowerCase() === onchain.toLowerCase();
+        renderResult({
+          match, computed, onchain, timestamp: block.timestamp, block: tx.blockNumber,
+          recorder, contract, txHash, demo: false,
+        });
+      } catch (err) {
+        renderError("Lookup failed", (err && err.message) ? err.message.slice(0, 160) : "Could not query the chain. Try again.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    verifyBtn.addEventListener("click", verify);
+    txEl.addEventListener("keydown", (e) => { if (e.key === "Enter") verify(); });
+
+    // ---------- demo loader ----------
+    $("demoLink").addEventListener("click", () => {
+      contentEl.value = DEMO_CONTENT;
+      txEl.value = DEMO_TX;
+      updateFingerprint();
+      localStorage.setItem("mfp.tx", DEMO_TX);
+      verify();
+      resultEl.scrollIntoView ? null : null; // no scrollIntoView per guidance
+      toast("Demo record loaded — try editing the message to see a FAIL");
+    });
+  </script>
+</body>
+</html>
