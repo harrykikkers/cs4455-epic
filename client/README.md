@@ -298,12 +298,16 @@ Alice derives the AES-256-GCM key with `HKDF-SHA256(dh_out, info="zebra-msg-v1")
 domain-separated from the keystore KEK (`"local-key-encrypt-v1"`) and the auth
 credential (`"server-auth-v1"`) so the same material can never collide across
 purposes. The message key is **static per (sender, recipient) pair**, so AES-GCM
-stays secure only because a fresh nonce is used on every message (Step 5) — a
-repeated (key, nonce) pair would be catastrophic.
+confidentiality rests entirely on never reusing a (key, nonce) pair — a repeat
+would be catastrophic (Step 5).
 
 **Step 5 — AES-256-GCM encrypt with replay-protected AAD.**
-Alice encrypts the plaintext client-side (never server-side) under a fresh
-12-byte nonce from the OS CSPRNG. The AAD is `sender_id ‖ recipient_id ‖ seq_no`,
+Alice encrypts the plaintext client-side (never server-side) under a random
+12-byte (96-bit) nonce drawn from the OS CSPRNG. Because the key is static, the
+nonce is *not* "used once" in a counter sense; safety comes from the random
+96-bit space being large enough that a collision is improbable across the
+realistic message volume of a single (sender, recipient) pair (the birthday
+bound puts a meaningful reuse risk only after ~2³² messages). The AAD is `sender_id ‖ recipient_id ‖ seq_no`,
 binding message ordering into the GCM authentication tag. The sequence number is
 per (sender, recipient) and strictly increasing; Alice persists her counter for
 each recipient locally.

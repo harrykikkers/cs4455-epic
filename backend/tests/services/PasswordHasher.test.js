@@ -6,9 +6,9 @@ jest.mock('argon2', () => ({
 
 jest.mock('../../src/config', () => ({
   argon2: {
-    memoryCost: 19456,
-    timeCost: 2,
-    parallelism: 1,
+    memoryCost: 65536,
+    timeCost: 3,
+    parallelism: 4,
   },
 }));
 
@@ -25,9 +25,9 @@ describe('PasswordHasher', () => {
 
     expect(hasher.options).toEqual({
       type: argon2.argon2id,
-      memoryCost: 19456,
-      timeCost: 2,
-      parallelism: 1,
+      memoryCost: 65536,
+      timeCost: 3,
+      parallelism: 4,
     });
   });
 
@@ -40,9 +40,9 @@ describe('PasswordHasher', () => {
     expect(argon2.hash).toHaveBeenCalledTimes(1);
     expect(argon2.hash).toHaveBeenCalledWith('my-password', {
       type: argon2.argon2id,
-      memoryCost: 19456,
-      timeCost: 2,
-      parallelism: 1,
+      memoryCost: 65536,
+      timeCost: 3,
+      parallelism: 4,
     });
     expect(result).toBe('hashed-value');
   });

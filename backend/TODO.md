@@ -150,7 +150,7 @@ and *not* touching message payloads. Gaps for the *backend's* slice:
   state that explicitly so the interviewer doesn't expect to find HKDF here.
 
 - **[GAP] Sensitive Data Exposure — log scrubbing.** Confirm the audit log
-  doesn't include `password`, `ciphertext`, `enc`, or `signature` fields.
+  doesn't include `password`, `ciphertext`, or `signature` fields.
   [src/utils/logger.js](src/utils/logger.js) should be reviewed and a test
   added that asserts no request body fields land in logs verbatim.
 

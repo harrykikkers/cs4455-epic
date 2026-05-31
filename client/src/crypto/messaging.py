@@ -12,9 +12,11 @@ On receive (step 8) the four checks run IN ORDER: signature → replay → ECDH/
 → AEAD decrypt. Plaintext is returned only after all four pass.
 
 The message key is *static* per (sender, recipient) pair — the same key encrypts
-every Alice→Bob message. AES-GCM stays secure under key reuse only because the
-nonce is fresh per message; a repeated (key, nonce) pair is catastrophic, so the
-nonce always comes from the OS CSPRNG (see crypto.aead).
+every Alice→Bob message. AES-GCM stays secure under this key reuse only because
+each message draws a random 96-bit nonce from the OS CSPRNG (see crypto.aead):
+the nonce is not "used once" in a counter sense, but the 96-bit space is large
+enough that a collision is improbable over a pair's realistic message volume.
+A repeated (key, nonce) pair would be catastrophic.
 
 There is deliberately no per-message public key on the wire: the recipient already
 holds the sender's pinned X25519 key (TOFU), so static ECDH needs nothing extra.
