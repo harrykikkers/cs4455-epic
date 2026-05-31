@@ -21,6 +21,9 @@ class MainFrame(ctk.CTkFrame):
     def __init__(self, app):
         super().__init__(app, fg_color="transparent")
         self.app = app
+        # Match the login/register screens: their card is a default CTkFrame,
+        # so reuse that same theme color for the chat panels instead of black.
+        panel = self._panel = ctk.ThemeManager.theme["CTkFrame"]["fg_color"]
         self._conversations = {}
         self._active_peer = None
         self._selected_msg = None
@@ -46,7 +49,7 @@ class MainFrame(ctk.CTkFrame):
 
         # ── Left sidebar ──
         sidebar = ctk.CTkFrame(self, width=280, corner_radius=0,
-                               fg_color=("#000000", "#000000"))
+                               fg_color=panel)
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
@@ -81,7 +84,7 @@ class MainFrame(ctk.CTkFrame):
         self._conv_list.pack(fill="both", expand=True, padx=4)
 
         # Bottom sidebar section
-        bottom = ctk.CTkFrame(sidebar, fg_color=("#000000", "#000000"),
+        bottom = ctk.CTkFrame(sidebar, fg_color=panel,
                               corner_radius=0)
         bottom.pack(fill="x", side="bottom")
 
@@ -108,7 +111,7 @@ class MainFrame(ctk.CTkFrame):
 
         # Header
         self._header = ctk.CTkFrame(right, height=64, corner_radius=0,
-                                    fg_color=("#000000", "#000000"))
+                                    fg_color=panel)
         self._header.pack(fill="x")
         self._header.pack_propagate(False)
 
@@ -143,7 +146,7 @@ class MainFrame(ctk.CTkFrame):
         # banner is packed/unpacked dynamically
 
         # Message area
-        self._msg_area = ctk.CTkScrollableFrame(right, fg_color=("#0a0a0a", "#0a0a0a"))
+        self._msg_area = ctk.CTkScrollableFrame(right, fg_color=panel)
         self._msg_area.pack(fill="both", expand=True)
 
         # Empty state
@@ -157,7 +160,7 @@ class MainFrame(ctk.CTkFrame):
         ctk.CTkFrame(right, height=2, fg_color=("#ffffff", "#ffffff"),
                      corner_radius=0).pack(fill="x", side="bottom")
         input_bar = ctk.CTkFrame(right, height=64, corner_radius=0,
-                                 fg_color=("#000000", "#000000"))
+                                 fg_color=panel)
         input_bar.pack(fill="x", side="bottom")
         input_bar.pack_propagate(False)
 
@@ -376,7 +379,7 @@ class MainFrame(ctk.CTkFrame):
         key_warning = data.get("key_warning", False)
         is_active = peer_id == self._active_peer
 
-        fg = ("#1a1a1a", "#1a1a1a") if is_active else ("#000000", "#000000")
+        fg = ("#1a1a1a", "#1a1a1a") if is_active else self._panel
         border_col = "#ffffff" if is_active else "#333333"
 
         card = ctk.CTkFrame(self._conv_list, fg_color=fg, corner_radius=10,
