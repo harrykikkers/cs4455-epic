@@ -9,6 +9,7 @@ read from the environment (optionally via a local ``.env`` file); see
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 try:  # optional — .env loading is a convenience, not a requirement
@@ -32,6 +33,21 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 # Alias kept for the UI/API layers (and existing tests) that import BASE_URL.
 BASE_URL = SERVER_URL # Just an alias as they are the same thing
+
+
+def keystore_path_for(username: str) -> str:
+    """Per-account keystore path.
+
+    Each account gets its own keystore directory so multiple users on one
+    machine never share state — the keypair, the KEK-encrypted plaintext cache
+    (``.msgcache``), the replay seq counters, and the C++ archive (``.archive``)
+    all live under ``<KEYSTORE dir>/<username>/``. Sharing a single path caused
+    a cache/counter desync (sent → ``[sent]``, received → ``[replay detected]``)
+    when switching accounts. The username is sanitised for filesystem safety.
+    """
+    safe = re.sub(r"[^a-z0-9_-]", "_", (username or "").strip().lower()) or "default"
+    return os.path.join(os.path.dirname(KEYSTORE_PATH), safe,
+                        os.path.basename(KEYSTORE_PATH))
 
 # Verify TLS for any non-local host.
 _LOCAL_HOSTS = ("localhost", "127.0.0.1") # If the server URL contains any of these, we assume it's a local dev server and skip TLS verification.

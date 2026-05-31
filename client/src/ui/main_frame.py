@@ -328,7 +328,19 @@ class MainFrame(ctk.CTkFrame):
                 except SignatureError:
                     m["plaintext"] = "[unverified — signature check failed]"
                 except ReplayError:
-                    m["plaintext"] = "[replay detected — dropped]"
+                    # We already accepted this seq from this sender, but the
+                    # local plaintext cache is gone (e.g. after a re-login). This
+                    # is an inbox re-display, not a wire attack — re-decrypt for
+                    # view only (no counter change) and re-heal the cache.
+                    try:
+                        pt, _ = self._svc.receive(
+                            m, pinned=pinned, changed=key_changed,
+                            enforce_replay=False)
+                        m["plaintext"] = pt
+                        self._plaintext_cache[message_id] = pt
+                        added = True
+                    except Exception:
+                        m["plaintext"] = "[encrypted — cannot decrypt]"
                 except Exception:
                     m["plaintext"] = "[encrypted — cannot decrypt]"
 

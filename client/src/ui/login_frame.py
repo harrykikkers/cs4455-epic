@@ -1,7 +1,9 @@
 import threading
 import customtkinter as ctk
 
+import config
 from constants import DEV_MODE_TOKEN
+from crypto.keystore import Keystore
 from errors import NetworkError
 from services.auth_service import AuthService
 
@@ -56,7 +58,10 @@ class LoginFrame(ctk.CTkFrame):
             try:
                 # AuthService logs in, unlocks the local keystore with the
                 # cleartext password, and publishes this user's public keys.
-                auth = AuthService()
+                # Per-account keystore path (see config.keystore_path_for) so
+                # accounts on one machine keep separate keys/cache/counters.
+                auth = AuthService(
+                    keystore=Keystore(path=config.keystore_path_for(user)))
                 data = auth.login(user, pw)
                 self.app.token    = data["token"]
                 self.app.user_id  = data["user"]["userId"]

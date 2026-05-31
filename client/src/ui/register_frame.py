@@ -1,7 +1,9 @@
 import threading
 import customtkinter as ctk
 
+import config
 from constants import MIN_PASSWORD_LENGTH
+from crypto.keystore import Keystore
 from errors import ConflictError, NetworkError, ValidationError
 from services.auth_service import AuthService
 
@@ -104,8 +106,11 @@ class RegisterFrame(ctk.CTkFrame):
             try:
                 # AuthService registers with the server, then generates the
                 # local keystore (X25519 + Ed25519, private keys KEK-encrypted).
+                # The keystore is scoped per-account so users on one machine
+                # don't share a keypair / plaintext cache / replay counters.
                 self.app.after(0, lambda: self._show_progress("Generating keypairs..."))
-                auth = AuthService()
+                auth = AuthService(
+                    keystore=Keystore(path=config.keystore_path_for(user)))
                 auth.register(user, pw)
                 self.app.keystore = auth.keystore
 

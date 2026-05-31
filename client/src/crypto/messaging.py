@@ -122,7 +122,8 @@ def seal(*, plaintext: str, sender_id: str, recipient_id: str, seq_no: int,
 
 def open_message(*, fields: dict, sender_id: str, recipient_id: str,
                  my_x_priv: bytes, peer_x_pub: bytes, peer_ed_pub: bytes,
-                 last_seq: Optional[int]) -> tuple[str, int]:
+                 last_seq: Optional[int],
+                 enforce_replay: bool = True) -> tuple[str, int]:
     """Verify, replay-check, and decrypt a received message (step 8).
 
     Four checks, IN ORDER:
@@ -134,6 +135,13 @@ def open_message(*, fields: dict, sender_id: str, recipient_id: str,
     Returns ``(plaintext, seq_no)``. Raises :class:`SignatureError`,
     :class:`ReplayError`, or ``cryptography.exceptions.InvalidTag``. The plaintext
     is produced only if every check passes.
+
+    ``enforce_replay`` gates check (2). It must stay ``True`` when *accepting* a
+    new message. Pass ``False`` only to re-decrypt a message we already accepted
+    (its seq_no is already recorded) purely for re-display — e.g. when the local
+    plaintext cache was lost. Signature + AEAD integrity are still enforced, so
+    this never weakens authenticity; it only skips the monotonic-ordering gate
+    that exists to reject *new* duplicates, not to forbid re-reading old ones.
     """
     ciphertext = _b64d(fields["ciphertext"])
     nonce = _b64d(fields["nonce"])
@@ -146,7 +154,7 @@ def open_message(*, fields: dict, sender_id: str, recipient_id: str,
         raise SignatureError("Ed25519 signature verification failed")
 
     # (2) replay / ordering — strictly greater than the last accepted seq_no
-    if last_seq is not None and seq_no <= last_seq:
+    if enforce_replay and last_seq is not None and seq_no <= last_seq:
         raise ReplayError(f"seq_no {seq_no} is not greater than last-seen {last_seq}")
 
     # (3) static ECDH + HKDF → message key

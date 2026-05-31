@@ -76,7 +76,8 @@ class MessageService:
 
     def receive(self, message: dict,
                 pinned: Optional[dict] = None,
-                changed: bool = False) -> tuple[str, bool]:
+                changed: bool = False,
+                enforce_replay: bool = True) -> tuple[str, bool]:
         """Verify and decrypt a received message; return ``(plaintext, changed)``.
 
         Four checks in order: Ed25519 signature → replay counter → static ECDH
@@ -87,6 +88,11 @@ class MessageService:
 
         Pass ``pinned`` + ``changed`` to skip the internal key fetch (avoids a
         redundant network round-trip when the caller already has the keys).
+
+        ``enforce_replay=False`` re-decrypts an already-accepted message for
+        re-display only (e.g. the plaintext cache was lost): it skips the replay
+        gate *and* does not advance the stored counter, so replay protection for
+        genuinely new messages is untouched. Signature + AEAD are still enforced.
         """
         sender_id = message.get("senderId") or message.get("sender_id", "")
         recipient_id = self.session.user_id
@@ -107,9 +113,13 @@ class MessageService:
             peer_x_pub=base64.b64decode(pinned["x25519"]),
             peer_ed_pub=base64.b64decode(pinned["ed25519"]),
             last_seq=last_seq,
+            enforce_replay=enforce_replay,
         )
 
-        self.keystore.set_recv_seq(sender_id, seq_no)
+        # Only advance the counter on the accept path; re-display must not
+        # regress it (seq_no here is an already-seen, older value).
+        if enforce_replay:
+            self.keystore.set_recv_seq(sender_id, seq_no)
         return plaintext, changed
 
     def forward(self, message_id: str, recipient_id: str, plaintext: str) -> tuple[dict, bool]:
