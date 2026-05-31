@@ -100,6 +100,33 @@ def test_round_trip(sealed, x25519_keypair, x25519_keypair_b, ed_keypair):
     assert seq_no == 5
 
 
+def test_sender_can_open_own_message(sealed, x25519_keypair, x25519_keypair_b, ed_keypair):
+    """The sender can re-open its OWN sent message (basis for decrypt_own).
+
+    Static ECDH is symmetric, so the sender recovers the same key from its own
+    X25519 private key + the recipient's X25519 public key; the signature is the
+    sender's, so it verifies against the sender's own Ed25519 public key. This
+    is display-only (enforce_replay=False), exactly as the cache-miss fallback
+    uses it.
+    """
+    sender_x_priv, _ = x25519_keypair
+    _, recipient_x_pub = x25519_keypair_b
+    _, sender_ed_pub = ed_keypair
+
+    plaintext, seq_no = open_message(
+        fields=sealed,
+        sender_id=SENDER_ID,
+        recipient_id=RECIPIENT_ID,
+        my_x_priv=sender_x_priv,        # sender's own X25519 private key
+        peer_x_pub=recipient_x_pub,     # recipient's X25519 public key
+        peer_ed_pub=sender_ed_pub,      # sender signed it → verify with own key
+        last_seq=None,
+        enforce_replay=False,
+    )
+    assert plaintext == PLAINTEXT
+    assert seq_no == 5
+
+
 # ---------------------------------------------------------------------------
 # seal() output shape
 # ---------------------------------------------------------------------------

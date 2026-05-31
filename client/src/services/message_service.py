@@ -122,6 +122,47 @@ class MessageService:
             self.keystore.set_recv_seq(sender_id, seq_no)
         return plaintext, changed
 
+    def decrypt_own(self, message: dict, pinned: Optional[dict] = None) -> str:
+        """Decrypt a message *this* user sent, for local re-display only.
+
+        Our own sent ciphertext is encrypted to the recipient, but static ECDH
+        is symmetric: the sender re-derives the same message key from its own
+        X25519 private key and the recipient's pinned X25519 public key. The
+        signature was produced by us, so it verifies against our *own* Ed25519
+        public key (we are the sender). Returns the plaintext.
+
+        Display-only path: it passes ``enforce_replay=False`` and never advances
+        any counter. The replay counter tracks inbound seqs per *sender*; our
+        own sends are outbound and don't belong to it — this is why sent
+        messages are normally served from the plaintext cache rather than
+        re-decrypted. Used only as a fallback when that cache misses (e.g. a
+        message sent from another session/device, or after the cache was reset).
+
+        Raises if the recipient rotated their X25519 key after the send (the
+        original public key is gone, so the key can't be re-derived) or on any
+        signature/AEAD failure — callers fall back to the ``[sent]`` placeholder.
+        """
+        recipient_id = message.get("recipientId") or message.get("recipient_id", "")
+        if pinned is None:
+            pinned, _ = self.key_svc.fetch_and_pin(recipient_id)
+        if "x25519" not in pinned:
+            raise RuntimeError("Recipient has no X25519 key on server.")
+
+        priv = self.keystore.private_keys()
+        my_ed_pub = base64.b64decode(self.keystore.public_keys()["ed25519"])
+
+        plaintext, _ = open_message(
+            fields=message,
+            sender_id=self.session.user_id,
+            recipient_id=recipient_id,
+            my_x_priv=priv["x25519"],
+            peer_x_pub=base64.b64decode(pinned["x25519"]),
+            peer_ed_pub=my_ed_pub,
+            last_seq=None,
+            enforce_replay=False,
+        )
+        return plaintext
+
     def forward(self, message_id: str, recipient_id: str, plaintext: str) -> tuple[dict, bool]:
         """Re-encrypt ``plaintext`` under ``recipient_id``'s key and forward it.
 

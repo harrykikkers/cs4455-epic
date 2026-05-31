@@ -189,6 +189,7 @@ class MainFrame(ctk.CTkFrame):
                 inbox = (self._svc.inbox() or {}).get("data", [])
                 sent  = (self._svc.sent() or {}).get("data", [])
                 self._decrypt_inbox(inbox)
+                self._decrypt_sent(sent)
                 _write_cache(inbox, sent)
                 _run_store_binary()
                 if self._alive:
@@ -350,6 +351,59 @@ class MainFrame(ctk.CTkFrame):
         # Persist the newly decrypted plaintext (encrypted under the KEK) so it
         # survives a restart without a live re-decrypt the replay check rejects.
         if added and ks is not None:
+            try:
+                ks.save_message_cache(self._plaintext_cache)
+            except Exception:
+                pass
+
+    def _decrypt_sent(self, sent):
+        """Decrypt our OWN sent messages in the worker thread, for display.
+
+        Sent ciphertext is encrypted to the recipient, but static ECDH is
+        symmetric, so we re-derive the key from our X25519 private key and the
+        recipient's pinned public key; the signature is ours, verified against
+        our own Ed25519 public key. Display-only — never touches the replay
+        counter. Cache hits are reused; misses are decrypted and re-cached so
+        the plaintext survives the next restart. Anything that can't be
+        decrypted (e.g. the recipient rotated keys) is left for ``_populate`` to
+        render as ``[sent]``.
+        """
+        ks = self.app.keystore
+        if ks is None:
+            return
+        added = False
+
+        by_recipient = {}
+        for m in sent:
+            rid = m.get("recipientId") or m.get("recipient_id")
+            by_recipient.setdefault(rid, []).append(m)
+
+        for recipient_id, msgs in by_recipient.items():
+            pinned = None  # fetched lazily, once per recipient
+            for m in msgs:
+                message_id = m.get("messageId")
+                if message_id in self._plaintext_cache:
+                    m["plaintext"] = self._plaintext_cache[message_id]
+                    continue
+                if not m.get("ciphertext"):
+                    continue
+                if pinned is None:
+                    try:
+                        pinned, _ = self._svc.key_svc.fetch_and_pin(recipient_id)
+                    except Exception:
+                        break  # no key for this recipient — leave the rest as [sent]
+                    if "x25519" not in pinned:
+                        break
+                try:
+                    pt = self._svc.decrypt_own(m, pinned=pinned)
+                    m["plaintext"] = pt
+                    if message_id:
+                        self._plaintext_cache[message_id] = pt
+                        added = True
+                except Exception:
+                    pass  # _populate falls back to [sent]
+
+        if added:
             try:
                 ks.save_message_cache(self._plaintext_cache)
             except Exception:
