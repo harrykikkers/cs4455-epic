@@ -1,10 +1,10 @@
 {
   "network": "sepolia",
   "chainId": 11155111,
-  "address": null,
-  "deployTxHash": null,
-  "deployBlock": null,
-  "notes": "Replace address, deployTxHash, deployBlock after running contracts/DEPLOY.md. The ABI below is hand-rolled from MessageDigest.sol; replace it with Remix's Compilation Details output if you want an exact byte-for-byte match (functionally identical either way).",
+  "address": "0x230Ce7b063DCFE8fd79e3f07B3403b59a6750b8f",
+  "deployTxHash": "0x8257b585334c77f5a77ae29d00e8dad06886e0734b1603bb3892ab4f60bdce61",
+  "deployBlock": 10963196,
+  "notes": "Deployed to Sepolia. Owner/deployer: 0xe9c4035de02929d9a925979dc7c282626450646b. The ABI below is hand-rolled from MessageDigest.sol; replace it with Remix's Compilation Details output if you want an exact byte-for-byte match (functionally identical either way).",
   "abi": [
     {
       "type": "constructor",
