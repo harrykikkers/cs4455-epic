@@ -793,7 +793,7 @@ class MainFrame(ctk.CTkFrame):
                             border_width=1, border_color="#2a2a2a")
         info.pack(fill="x", padx=20, pady=(0, 12))
 
-        sender = m.get("sender_username") or m.get("sender_id", "?")
+        sender = m.get("sender_username") or (self.app.username if m.get("_mine") else m.get("sender_id", "?"))
         ctk.CTkLabel(info, text=f"From:  {sender}",
                      font=ctk.CTkFont(size=13)).pack(anchor="w", padx=14, pady=(12, 2))
         ctk.CTkLabel(info, text=f"Date:  {m.get('created_at', '?')}",
