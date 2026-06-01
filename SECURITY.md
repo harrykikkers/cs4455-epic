@@ -231,6 +231,14 @@ rejects a malformed digest before any transaction is sent.
 - **Edge (nginx, `deploy/nginx/`)**: TLS 1.2/1.3 only with a Let's Encrypt
   certificate and full chain, OCSP stapling, HTTP→HTTPS 301 redirect, HSTS at
   the edge, and `server_tokens off` to hide the nginx version.
+- **Client TLS verification**: the Python client sets `requests`' `verify=True`
+  unconditionally (`client/src/config.py:55` → `client/src/api/client.py:39`),
+  so production traffic to `zebra.theburkenator.com` is fully validated — chain
+  of trust, hostname/SAN, and expiry against the system CA store — and fails
+  closed (`requests.exceptions.SSLError`) on any mismatch. There is no toggle to
+  disable it; local dev talks plain `http://localhost` (no TLS handshake, so the
+  flag is a no-op there). There is no certificate pinning; trust rests on the
+  system CA store.
 - **Network exposure**: MySQL is bound to `127.0.0.1` (loopback only); the only
   public surface is nginx. Node runs under a hardened systemd unit
   (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
@@ -240,9 +248,8 @@ rejects a malformed digest before any transaction is sent.
   are committed to the repository.
 
 **Residual risk:** the backend listens over plain HTTP behind nginx (TLS
-terminated at the edge), and the unused `TLS_CERT_PATH` / `TLS_KEY_PATH`
-variables in `.env.example` should be removed or wired. Tracked under planned
-hardening.
+terminated at the edge) — accepted by design, since that hop is loopback-only
+within a single trust domain.
 
 ## 7. Sensitive Data Exposure
 
@@ -260,7 +267,7 @@ hardening.
 - **Logging** uses structured Winston logs plus a dedicated audit log
   (`src/utils/logger.js`); request bodies are not logged verbatim, so the auth
   credential, ciphertext, and signature do not land in logs.
-- **JWT secret** is supplied via `JWT_SECRET` in `.env` (not committed) and
+- **JWT secret** is supplied via `JWT_SECRET` in `.env` and
   should be at least 32 bytes of CSPRNG output.
 
 **Known trade-off:** registration returns `409` for a taken username versus
@@ -312,5 +319,3 @@ for transparency:
    documented and rate-limited.
 2. **Add a log-scrubbing regression test** asserting no sensitive field is ever
    logged verbatim.
-3. **Remove the unused `TLS_CERT_PATH` / `TLS_KEY_PATH` variables** (TLS is
-   terminated at nginx).

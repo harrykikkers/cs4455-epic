@@ -226,11 +226,10 @@ using the system CA bundle (via `certifi`). The client enforces:
 - Hostname verification — the certificate's Subject Alternative Name
   must match the server URL
 - Expiry checks — expired certificates are rejected
-- `config.py` refuses non-`https://` values for `SERVER_URL` when the
-  host is not `localhost` or `127.0.0.1`
 
-TLS verification is never disabled in production. During local
-development, `http://localhost` is permitted.
+Verification is always on (`VERIFY_SSL = True` in `config.py`) with no toggle
+to disable it. Local development talks plain `http://localhost`, for which the
+flag is a no-op — there is no TLS handshake to verify.
 
 ### Input Validation (client-side)
 

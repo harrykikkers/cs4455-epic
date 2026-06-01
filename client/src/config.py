@@ -49,7 +49,8 @@ def keystore_path_for(username: str) -> str:
     return os.path.join(os.path.dirname(KEYSTORE_PATH), safe,
                         os.path.basename(KEYSTORE_PATH))
 
-# Verify TLS for any non-local host.
-_LOCAL_HOSTS = ("localhost", "127.0.0.1") # If the server URL contains any of these, we assume it's a local dev server and skip TLS verification.
-VERIFY_SSL = not any(host in BASE_URL for host in _LOCAL_HOSTS) # the requests library will verify the full certificate and host name
-# prevents MITM attacks
+# TLS verification is always on. `requests` validates the full certificate
+# chain and hostname against the system CA bundle, preventing wire MITM.
+# This is a no-op for local dev, which talks plain `http://localhost` (no TLS
+# handshake to verify); production (`https://...`) is fully validated.
+VERIFY_SSL = True
