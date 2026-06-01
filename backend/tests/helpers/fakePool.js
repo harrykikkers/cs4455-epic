@@ -17,12 +17,25 @@ function makeFakePool() {
   const users = new Map(); // user_id -> row
   const publicKeys = new Map(); // `${user_id}|${key_type}` -> row
   const publicKeyHistory = []; // append-only
+  const messages = new Map(); // message_id -> row
+  const messageShares = []; // share rows (append-only; revoked_at flips in place)
+  const blockchainRecords = []; // chain rows
 
   function findByUsername(username) {
     for (const row of users.values()) {
       if (row.username === username) return row;
     }
     return undefined;
+  }
+
+  // LIMIT/OFFSET are interpolated into the SQL string by MessageRepository
+  // (mysql2 rejects them as bound params), so we parse them back out here.
+  function limitOffset(sql, rows) {
+    const m = sql.match(/LIMIT (\d+) OFFSET (\d+)/i);
+    if (!m) return rows;
+    const lim = Number.parseInt(m[1], 10);
+    const off = Number.parseInt(m[2], 10);
+    return rows.slice(off, off + lim);
   }
 
   async function execute(sql, params = []) {
@@ -198,6 +211,224 @@ function makeFakePool() {
       return [rows, []];
     }
 
+    // ===== messages =====
+
+    // INSERT INTO messages (...) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    if (/^INSERT INTO messages/i.test(normalised)) {
+      const [messageId, senderId, recipientId, ciphertext, nonce, signature, seqNo, digestHash] = params;
+      // Unique (recipient_id, nonce) — the server-side replay backstop.
+      for (const row of messages.values()) {
+        if (row.recipient_id === recipientId && row.nonce === nonce) {
+          const err = new Error("Duplicate entry for key 'messages.uniq_recipient_nonce'");
+          err.code = 'ER_DUP_ENTRY';
+          throw err;
+        }
+      }
+      messages.set(messageId, {
+        message_id: messageId,
+        sender_id: senderId,
+        recipient_id: recipientId,
+        ciphertext,
+        nonce,
+        signature,
+        seq_no: seqNo,
+        digest_hash: digestHash,
+        chain_status: 'pending', // DDL default
+        created_at: new Date(),
+        deleted_at: null,
+      });
+      return [{ affectedRows: 1 }, []];
+    }
+
+    // findById: SELECT m.*, u.username AS sender_username FROM messages m JOIN users u ...
+    //           WHERE m.message_id = ? AND m.deleted_at IS NULL
+    if (/^SELECT m\.\*, u\.username AS sender_username FROM messages m/i.test(normalised)) {
+      const [messageId] = params;
+      const row = messages.get(messageId);
+      if (!row || row.deleted_at !== null) return [[], []];
+      const u = users.get(row.sender_id);
+      return [[{ ...row, sender_username: u ? u.username : null }], []];
+    }
+
+    // findByRecipient: SELECT m.message_id, m.sender_id, m.ciphertext ... WHERE m.recipient_id = ?
+    if (/^SELECT m\.message_id, m\.sender_id, m\.ciphertext/i.test(normalised)) {
+      const [recipientId] = params;
+      const rows = [...messages.values()]
+        .filter((r) => r.recipient_id === recipientId && r.deleted_at === null)
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((r) => {
+          const u = users.get(r.sender_id);
+          return {
+            message_id: r.message_id, sender_id: r.sender_id, ciphertext: r.ciphertext,
+            nonce: r.nonce, signature: r.signature, seq_no: r.seq_no,
+            digest_hash: r.digest_hash, chain_status: r.chain_status,
+            created_at: r.created_at, sender_username: u ? u.username : null,
+          };
+        });
+      return [limitOffset(normalised, rows), []];
+    }
+
+    // findBySender: SELECT m.message_id, m.recipient_id, m.ciphertext ... WHERE m.sender_id = ?
+    if (/^SELECT m\.message_id, m\.recipient_id, m\.ciphertext/i.test(normalised)) {
+      const [senderId] = params;
+      const rows = [...messages.values()]
+        .filter((r) => r.sender_id === senderId && r.deleted_at === null)
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((r) => {
+          const u = users.get(r.recipient_id);
+          return {
+            message_id: r.message_id, recipient_id: r.recipient_id, ciphertext: r.ciphertext,
+            nonce: r.nonce, signature: r.signature, seq_no: r.seq_no,
+            digest_hash: r.digest_hash, chain_status: r.chain_status,
+            created_at: r.created_at, recipient_username: u ? u.username : null,
+          };
+        });
+      return [limitOffset(normalised, rows), []];
+    }
+
+    // softDelete: UPDATE messages SET deleted_at = NOW() WHERE message_id = ?
+    //             AND (sender_id = ? OR recipient_id = ?) AND deleted_at IS NULL
+    if (/^UPDATE messages SET deleted_at = NOW\(\)/i.test(normalised)) {
+      const [messageId, userId, userId2] = params;
+      const row = messages.get(messageId);
+      const owns = row && (row.sender_id === userId || row.recipient_id === userId2);
+      if (row && owns && row.deleted_at === null) {
+        row.deleted_at = new Date();
+        return [{ affectedRows: 1 }, []];
+      }
+      return [{ affectedRows: 0 }, []];
+    }
+
+    // markChainFailed / recordChainEntry: UPDATE messages SET chain_status = ? WHERE message_id = ?
+    if (/^UPDATE messages SET chain_status = \? WHERE message_id = \?$/i.test(normalised)) {
+      const [chainStatus, messageId] = params;
+      const row = messages.get(messageId);
+      if (row) row.chain_status = chainStatus;
+      return [{ affectedRows: row ? 1 : 0 }, []];
+    }
+
+    // ===== message_shares =====
+
+    // INSERT INTO message_shares (...) VALUES (...)
+    if (/^INSERT INTO message_shares/i.test(normalised)) {
+      const [id, messageId, sharedById, sharedWithId, ciphertext, nonce, signature, seqNo, digestHash] = params;
+      // Unique (shared_with_id, nonce) — replay backstop on forwards.
+      if (messageShares.some((s) => s.shared_with_id === sharedWithId && s.nonce === nonce)) {
+        const err = new Error("Duplicate entry for key 'message_shares.uniq_sharedwith_nonce'");
+        err.code = 'ER_DUP_ENTRY';
+        throw err;
+      }
+      messageShares.push({
+        id,
+        message_id: messageId,
+        shared_by_id: sharedById,
+        shared_with_id: sharedWithId,
+        ciphertext,
+        nonce,
+        signature,
+        seq_no: seqNo,
+        digest_hash: digestHash,
+        created_at: new Date(),
+        revoked_at: null,
+      });
+      return [{ affectedRows: 1 }, []];
+    }
+
+    // findSharedWith: SELECT ms.*, u.username FROM message_shares ms ...
+    //                 WHERE ms.message_id = ? AND ms.revoked_at IS NULL
+    if (/^SELECT ms\.\*, u\.username FROM message_shares ms/i.test(normalised)) {
+      const [messageId] = params;
+      const rows = messageShares
+        .filter((s) => s.message_id === messageId && s.revoked_at === null)
+        .map((s) => {
+          const u = users.get(s.shared_with_id);
+          return { ...s, username: u ? u.username : null };
+        });
+      return [rows, []];
+    }
+
+    // findSharedWithUser: SELECT ms.id AS share_id, ms.message_id, ms.shared_by_id AS sender_id ...
+    //                     WHERE ms.shared_with_id = ? AND revoked_at IS NULL AND om.deleted_at IS NULL
+    if (/^SELECT ms\.id AS share_id, ms\.message_id, ms\.shared_by_id AS sender_id/i.test(normalised)) {
+      const [userId] = params;
+      const rows = messageShares
+        .filter((s) => s.shared_with_id === userId && s.revoked_at === null)
+        .filter((s) => { const om = messages.get(s.message_id); return om && om.deleted_at === null; })
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((s) => {
+          const u = users.get(s.shared_by_id);
+          const om = messages.get(s.message_id);
+          return {
+            share_id: s.id, message_id: s.message_id, sender_id: s.shared_by_id,
+            ciphertext: s.ciphertext, nonce: s.nonce, signature: s.signature,
+            seq_no: s.seq_no, digest_hash: s.digest_hash, created_at: s.created_at,
+            sender_username: u ? u.username : null, chain_status: om ? om.chain_status : null,
+          };
+        });
+      return [limitOffset(normalised, rows), []];
+    }
+
+    // findSharedByUser: SELECT ms.id AS share_id, ms.message_id, ms.shared_with_id AS recipient_id ...
+    //                   WHERE ms.shared_by_id = ? AND revoked_at IS NULL AND om.deleted_at IS NULL
+    if (/^SELECT ms\.id AS share_id, ms\.message_id, ms\.shared_with_id AS recipient_id/i.test(normalised)) {
+      const [userId] = params;
+      const rows = messageShares
+        .filter((s) => s.shared_by_id === userId && s.revoked_at === null)
+        .filter((s) => { const om = messages.get(s.message_id); return om && om.deleted_at === null; })
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((s) => {
+          const u = users.get(s.shared_with_id);
+          const om = messages.get(s.message_id);
+          return {
+            share_id: s.id, message_id: s.message_id, recipient_id: s.shared_with_id,
+            ciphertext: s.ciphertext, nonce: s.nonce, signature: s.signature,
+            seq_no: s.seq_no, digest_hash: s.digest_hash, created_at: s.created_at,
+            recipient_username: u ? u.username : null, chain_status: om ? om.chain_status : null,
+          };
+        });
+      return [limitOffset(normalised, rows), []];
+    }
+
+    // revokeShare: UPDATE message_shares SET revoked_at = NOW() WHERE message_id = ? AND shared_with_id = ?
+    if (/^UPDATE message_shares SET revoked_at = NOW\(\)/i.test(normalised)) {
+      const [messageId, sharedWithId] = params;
+      let affected = 0;
+      for (const s of messageShares) {
+        if (s.message_id === messageId && s.shared_with_id === sharedWithId && s.revoked_at === null) {
+          s.revoked_at = new Date();
+          affected += 1;
+        }
+      }
+      return [{ affectedRows: affected }, []];
+    }
+
+    // ===== blockchain_records =====
+
+    // INSERT INTO blockchain_records (id, message_id, tx_hash, digest_hash) VALUES (?, ?, ?, ?)
+    if (/^INSERT INTO blockchain_records/i.test(normalised)) {
+      const [id, messageId, txHash, digestHash] = params;
+      if (blockchainRecords.some((r) => r.tx_hash === txHash)) {
+        const err = new Error("Duplicate entry for key 'blockchain_records.tx_hash'");
+        err.code = 'ER_DUP_ENTRY';
+        throw err;
+      }
+      blockchainRecords.push({
+        id, message_id: messageId, tx_hash: txHash, digest_hash: digestHash, created_at: new Date(),
+      });
+      return [{ affectedRows: 1 }, []];
+    }
+
+    // findChainRecord: SELECT id, tx_hash, digest_hash, created_at FROM blockchain_records
+    //                  WHERE message_id = ? ORDER BY created_at DESC LIMIT 1
+    if (/^SELECT id, tx_hash, digest_hash, created_at FROM blockchain_records/i.test(normalised)) {
+      const [messageId] = params;
+      const rows = blockchainRecords
+        .filter((r) => r.message_id === messageId)
+        .sort((a, b) => b.created_at - a.created_at)
+        .map((r) => ({ ...r }));
+      return [rows.length ? [rows[0]] : [], []];
+    }
+
     throw new Error(`fakePool: no route matched SQL: ${normalised}`);
   }
 
@@ -210,6 +441,9 @@ function makeFakePool() {
       return {
         publicKeys: new Map([...publicKeys].map(([k, v]) => [k, { ...v }])),
         publicKeyHistory: publicKeyHistory.map((r) => ({ ...r })),
+        messages: new Map([...messages].map(([k, v]) => [k, { ...v }])),
+        messageShares: messageShares.map((r) => ({ ...r })),
+        blockchainRecords: blockchainRecords.map((r) => ({ ...r })),
       };
     }
 
@@ -218,6 +452,12 @@ function makeFakePool() {
       for (const [k, v] of s.publicKeys) publicKeys.set(k, v);
       publicKeyHistory.length = 0;
       publicKeyHistory.push(...s.publicKeyHistory);
+      messages.clear();
+      for (const [k, v] of s.messages) messages.set(k, v);
+      messageShares.length = 0;
+      messageShares.push(...s.messageShares);
+      blockchainRecords.length = 0;
+      blockchainRecords.push(...s.blockchainRecords);
     }
 
     return {
@@ -251,6 +491,9 @@ function makeFakePool() {
     _store: users,
     _publicKeysStore: publicKeys,
     _publicKeyHistoryStore: publicKeyHistory,
+    _messagesStore: messages,
+    _messageSharesStore: messageShares,
+    _blockchainRecordsStore: blockchainRecords,
   };
 }
 
