@@ -13,6 +13,7 @@ function messageRoutes(messageController, authMw) {
   router.get('/:id', messageController.getOne);
   router.get('/:id/chain', messageController.chainProof);
   router.post('/:id/forward', validate.forwardMessage, messageController.forward);
+  router.get('/:id/shares', messageController.shares);
   router.post('/:id/revoke', validate.revokeAccess, messageController.revoke);
   router.delete('/:id', messageController.remove);
 

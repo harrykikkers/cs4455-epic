@@ -85,6 +85,15 @@ class MessageController {
     }
   };
 
+  shares = async (req, res, next) => {
+    try {
+      const shares = await this._messageService.getShares(req.params.id, req.user.id);
+      res.json({ data: shares });
+    } catch (err) {
+      next(err);
+    }
+  };
+
   revoke = async (req, res, next) => {
     try {
       await this._messageService.revokeAccess(req.params.id, req.user.id, req.body.userId);

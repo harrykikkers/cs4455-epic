@@ -140,6 +140,8 @@ class Keystore:
         data.setdefault("seq_recv", {})[sender_id] = int(seq_no)
         self._save(data)
 
+    # The seq counter must survive app restarts and be stored
+
     def public_keys(self) -> dict:
         """Return base64-encoded public keys — no password needed."""
         data = self._load()
@@ -180,7 +182,7 @@ class Keystore:
                                 base64.b64decode(blob["ciphertext"]), _CACHE_AAD)
             return json.loads(plaintext.decode("utf-8"))
         except Exception:
-            return {}
+            return {} # Broad Exception is intentional — if the cache can't be read, just start with an empty one.
 
     def load_message_cache(self) -> dict:
         """Load the persisted plaintext cache for this session."""
@@ -214,11 +216,16 @@ class Keystore:
     def _write_json_secure(self, path: str, data: dict) -> None:
         directory = os.path.dirname(path)
         if directory:
-            os.makedirs(directory, exist_ok=True)
+            os.makedirs(directory, exist_ok=True) # exist_ok=True - if it exists dont throw FileExistsError
         # Write to a unique temp file then rename atomically — safe against crashes
-        # and concurrent writes. 0o600 = owner read/write only.
+        # and concurrent writes.
         tmp = f"{path}.{os.getpid()}.{base64.urlsafe_b64encode(os.urandom(6)).decode('ascii')}.tmp"
+        # pid is the process_id to prevent different processes writing to the same temp file simultaneously.
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # os.open allows us to set file permissions on creation
+        # O_WRONLY - WRITING ONLY, O_CREAT - CREATE IF FILE DOESNT EXIST
+        # O_TRUNC - TRUNCATE TO ZERO LENGTH IF FILE EXISTS (deletion)
+        # 0o600 - file permissions: owner read/write only
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)

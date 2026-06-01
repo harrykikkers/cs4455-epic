@@ -133,6 +133,25 @@ class MessageRepository {
     return rows;
   }
 
+  async findSharedByUser(userId, { limit = 50, offset = 0 } = {}) {
+    const lim = Number.parseInt(limit, 10);
+    const off = Number.parseInt(offset, 10);
+    const [rows] = await this._pool.execute(
+      `SELECT ms.id AS share_id, ms.message_id, ms.shared_with_id AS recipient_id,
+              ms.ciphertext, ms.nonce, ms.signature, ms.seq_no, ms.digest_hash,
+              ms.created_at, u.username AS recipient_username,
+              om.chain_status AS chain_status
+       FROM message_shares ms
+       JOIN users u ON u.user_id = ms.shared_with_id
+       JOIN messages om ON om.message_id = ms.message_id
+       WHERE ms.shared_by_id = ? AND ms.revoked_at IS NULL AND om.deleted_at IS NULL
+       ORDER BY ms.created_at DESC
+       LIMIT ${lim} OFFSET ${off}`,
+      [userId]
+    );
+    return rows;
+  }
+
   async softDelete(messageId, userId) {
     const [result] = await this._pool.execute(
       'UPDATE messages SET deleted_at = NOW() WHERE message_id = ? AND (sender_id = ? OR recipient_id = ?) AND deleted_at IS NULL',

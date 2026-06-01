@@ -54,6 +54,10 @@ class MessageAPI(BaseClient):
             "digest": digest,
         })
 
+    def shares(self, message_id: str) -> Any:
+        """GET /api/messages/:id/shares — list users this message was forwarded to."""
+        return self._get(f"/api/messages/{message_id}/shares")
+
     def revoke(self, message_id: str, user_id: str) -> Any:
         """POST /api/messages/:id/revoke — revoke a user's shared access.
 

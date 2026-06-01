@@ -783,7 +783,7 @@ class MainFrame(ctk.CTkFrame):
         win.title("Message Details")
         win.geometry("460x500")
         win.resizable(False, False)
-        win.grab_set()
+        win.after(100, win.grab_set)
 
         ctk.CTkLabel(win, text="Message Details",
                      font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(20, 12))
@@ -835,7 +835,17 @@ class MainFrame(ctk.CTkFrame):
                      font=ctk.CTkFont(size=14, weight="bold")).pack(
                          anchor="w", padx=24, pady=(4, 6))
 
-        fwd_list = m.get("_forwarded_to", [])
+        # Fetch live share list from server
+        orig_id = m.get("originalMessageId") or m.get("messageId")
+        try:
+            resp = self._svc.api.shares(orig_id)
+            fwd_list = (resp or {}).get("data", [])
+            for f in fwd_list:
+                f["username"] = f.get("username", "?")
+                f["user_id"]  = f.get("userId", "")
+                f["forwarded_at"] = str(f.get("sharedAt", ""))
+        except Exception:
+            fwd_list = m.get("_forwarded_to", [])
 
         fwd_frame = ctk.CTkScrollableFrame(win, height=120,
                                            fg_color=("#1e1e1e", "#1e1e1e"),

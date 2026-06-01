@@ -12,6 +12,7 @@ class AuthAPI(BaseClient):
         """POST /api/auth/register — returns ``{ user_id }``."""
         return self._post("/api/auth/register",
                           json={"username": username, "password": password})
+    # posts to the server
 
     def login(self, username: str, password: str) -> Any:
         """POST /api/auth/login — returns token + user; caller stores it."""
@@ -22,6 +23,7 @@ class AuthAPI(BaseClient):
         """PUT /api/auth/password — requires an authenticated session."""
         return self._put("/api/auth/password",
                          json={"currentPassword": current, "newPassword": new})
+    # put updates an existing resource on the server
 
     def get_user(self, username: str) -> Any:
         """GET /api/auth/user?username=… — look up a user by username.

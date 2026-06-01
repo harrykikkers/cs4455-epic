@@ -62,8 +62,9 @@ class MessageService {
   }
 
   async getSent(userId, options) {
-    const rows = await this._messageRepo.findBySender(userId, options);
-    return rows.map(toMessageDTO);
+    const direct = (await this._messageRepo.findBySender(userId, options)).map(toMessageDTO);
+    const forwarded = (await this._messageRepo.findSharedByUser(userId, options)).map(toSharedSentDTO);
+    return [...direct, ...forwarded].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 
   async getMessage(messageId, userId) {
@@ -109,6 +110,16 @@ class MessageService {
     // chain record already attests to the plaintext that was forwarded.
     logger.info(`Message ${messageId} forwarded to ${recipientId}`);
     return { id };
+  }
+
+  async getShares(messageId, userId) {
+    await this.getMessage(messageId, userId);
+    const rows = await this._messageRepo.findSharedWith(messageId);
+    return rows.map(r => ({
+      userId: r.shared_with_id,
+      username: r.username,
+      sharedAt: r.created_at,
+    }));
   }
 
   async revokeAccess(messageId, userId, revokeUserId) {
@@ -168,6 +179,23 @@ function toMessageDTO(row) {
  * and re-forwarding. senderId is the forwarder, so the client decrypts with the
  * forwarder's pinned keys against the same replay counter as direct messages.
  */
+function toSharedSentDTO(row) {
+  return {
+    messageId: row.share_id,
+    originalMessageId: row.message_id,
+    shared: true,
+    recipientId: row.recipient_id,
+    recipientUsername: row.recipient_username,
+    ciphertext: row.ciphertext,
+    nonce: row.nonce,
+    signature: row.signature,
+    seqNo: row.seq_no,
+    digestHash: row.digest_hash,
+    chainStatus: row.chain_status,
+    createdAt: row.created_at,
+  };
+}
+
 function toSharedInboxDTO(row) {
   return {
     messageId: row.share_id,
