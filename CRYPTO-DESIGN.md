@@ -158,11 +158,11 @@ Registration establishes a server login credential; key generation happens clien
 sequenceDiagram
     participant C as Client (user device)
     participant S as Server (untrusted)
-    C->>C: 1. Argon2id(password) → material;<br/>HKDF "server-auth-v1" → 64-hex credential
+    C->>C: 1. Argon2id(password) → material<br/>HKDF "server-auth-v1" → 64-hex credential
     C->>S: 2. POST /register { username, credential }
     S->>S: 3. Argon2id(credential, per-user salt) → store $argon2id$…
     C->>C: 4. Generate X25519 + Ed25519 keypairs (CSPRNG)
-    C->>C: 5. HKDF "local-key-encrypt-v1" → KEK;<br/>AES-256-GCM wrap private keys under KEK → keystore
+    C->>C: 5. HKDF "local-key-encrypt-v1" → KEK<br/>AES-256-GCM wrap private keys under KEK → keystore
     C->>S: 6. POST /api/keys { x25519_pub, ed25519_pub }
 ```
 
@@ -189,7 +189,7 @@ sequenceDiagram
         A->>S: GET /api/keys/:bob/history/:keyType
         S-->>A: Append-only rotation history (versioned)
         alt New key is a legitimate published rotation
-            A->>A: Prompt user to accept; update pin
+            A->>A: Prompt user to accept, then update pin
         else New key not in history
             A->>A: Raise key-change warning<br/>(possible substitution attack)
         end
@@ -207,12 +207,12 @@ sequenceDiagram
     A->>A: 1. Fetch + pin Bob's X25519 key (§4.2)
     A->>A: 2. dh = X25519(skA_x, pkB_x)
     A->>A: 3. K = HKDF-Expand(dh, "zebra-msg-v1", 32)
-    A->>A: 4. n ← CSPRNG(96-bit); seq = next per-recipient counter
+    A->>A: 4. n ← CSPRNG(96-bit), seq = next per-recipient counter
     A->>A: 5. ct = AES-256-GCM-Seal(K, n, pt, AAD=idA‖idB‖seq)
     A->>A: 6. σ = Ed25519-Sign(skA_ed, idA‖idB‖seq‖ct‖n)
     A->>A: 7. d = keccak256(pt)
     A->>S: POST /api/messages { idB, ct, n, σ, seq, d }
-    S->>S: Store row; anchor d on Sepolia (async)
+    S->>S: Store row, anchor d on Sepolia (async)
 ```
 
 Steps follow the symbolic construction of §1. The per-recipient sequence counter is monotonic and persisted in the keystore, so it survives restarts and cannot silently reset.
@@ -228,9 +228,9 @@ sequenceDiagram
     S-->>B: { idA, ct, n, σ, seq, d }
     B->>B: 1. Ed25519-Verify(σ) against Alice's pinned key → else REJECT
     B->>B: 2. Replay: seq strictly > last-seen(Alice)? → else REJECT
-    B->>B: 3. dh = X25519(skB_x, pkA_x); K = HKDF-Expand(dh, "zebra-msg-v1", 32)
+    B->>B: 3. dh = X25519(skB_x, pkA_x), K = HKDF-Expand(dh, "zebra-msg-v1", 32)
     B->>B: 4. pt = AES-256-GCM-Open(K, n, ct, AAD=idA‖idB‖seq) → else REJECT (InvalidTag)
-    B->>B: Accept pt; update last-seen(Alice) = seq
+    B->>B: Accept pt, update last-seen(Alice) = seq
 ```
 
 1. **Signature first.** Verifying Ed25519 before doing any key agreement or decryption means a forged or tampered message is discarded cheaply, without spending an ECDH operation — good for both correctness and denial-of-service resistance.
