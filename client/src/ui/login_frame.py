@@ -72,7 +72,9 @@ class LoginFrame(ctk.CTkFrame):
             except NetworkError:
                 self.app.after(0, lambda: self.status.configure(
                     text="Cannot connect — is the backend running?"))
+                # lambda exists here to run the call for the ui in the main thread
             except Exception:
                 self.app.after(0, lambda: self.status.configure(
                     text="Invalid username or password."))
         threading.Thread(target=run, daemon=True).start()
+        # daemon = True means the thread will automatically close when the main program exits

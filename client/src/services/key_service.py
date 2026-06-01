@@ -26,6 +26,7 @@ class KeyService:
         pub = self.keystore.public_keys()
         for key_type in ("x25519", "ed25519"):
             self.api.publish(pub[key_type], key_type, acknowledge_rotation=True)
+            # acknowledge rotation being true means it overwrites what the server has
 
     def fetch_and_pin(self, user_id: str) -> tuple[dict, bool]:
         """Fetch a peer's keys and TOFU-pin them on first contact.

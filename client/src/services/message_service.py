@@ -62,7 +62,7 @@ class MessageService:
             my_x_priv=priv["x25519"],
             my_ed_priv=priv["ed25519"],
             peer_x_pub=base64.b64decode(pinned["x25519"]),
-        )
+        ) # seal returns a dict, it does all the crypto and returns the fields needed 
 
         resp = self.api.send(
             recipient_id=recipient_id,
