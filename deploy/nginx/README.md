@@ -1,113 +1,85 @@
-# nginx + Let's Encrypt deployment
+# nginx deployment — zebra.theburkenator.com
 
-This sets up nginx as a TLS-terminating reverse proxy in front of the Node
-backend, with an auto-renewing Let's Encrypt certificate.
+## How TLS works on this infrastructure
 
-Target: Ubuntu 22.04 / 24.04 on `zebra.theburkenator.com`.
+TLS is **not** configured on the VM. The hosting provider runs a gateway in
+front of all student VMs that:
 
-If your subdomain is different, replace every `zebra.theburkenator.com` below
-(and rename `zebra.theburkenator.com.conf`).
+- Terminates TLS 1.2/1.3 with an A+ rated Let's Encrypt certificate
+- Enforces HTTPS — HTTP requests are redirected to HTTPS at the gateway
+- Auto-renews certificates via Let's Encrypt
+- Forwards plain HTTP to **port 80** on your VM over the internal network
+
+You do not need certbot, cert files, or a 443 server block. nginx listens on
+port 80 only.
 
 ---
 
-## 1. Install packages
+## Architecture
+
+```
+[client] ──TLS 1.2/1.3──▶ [provider gateway :443] ──HTTP──▶ [nginx :80] ──loopback──▶ [node :3000]
+```
+
+---
+
+## 1. Install nginx
 
 ```bash
 sudo apt update
-sudo apt install -y nginx certbot python3-certbot-nginx
+sudo apt install -y nginx
 ```
 
-## 2. Drop the configs
+---
+
+## 2. Drop the config
 
 From the repo root on the VM:
 
 ```bash
-# The per-site server block
 sudo cp deploy/nginx/zebra.theburkenator.com.conf \
         /etc/nginx/sites-available/zebra.theburkenator.com
 
-# Enable it
 sudo ln -sf /etc/nginx/sites-available/zebra.theburkenator.com \
             /etc/nginx/sites-enabled/zebra.theburkenator.com
 
-# Remove the default site so port 80/443 isn't claimed by the boilerplate
 sudo rm -f /etc/nginx/sites-enabled/default
-
-# The shared rate-limit zone (used by limit_req in the server block)
-sudo cp deploy/nginx/rate-limit.conf /etc/nginx/conf.d/rate-limit.conf
 ```
 
-## 3. Issue the certificate
+> **Note:** `rate-limit.conf` is not needed — the `limit_req_zone` declaration
+> is included directly in `zebra.theburkenator.com.conf`.
 
-The nginx config references cert files that don't exist yet, so we have to
-start nginx with the HTTPS server block commented out temporarily — *or* use
-certbot's `--nginx` plugin, which handles this for us.
+---
 
-Easier path:
+## 3. Place the verification page
 
 ```bash
-# Comment out the entire `server { listen 443 ssl; ... }` block first, then:
-sudo nginx -t
-sudo systemctl reload nginx
-
-# Now certbot can prove ownership over port 80
-sudo certbot --nginx -d zebra.theburkenator.com \
-    --non-interactive --agree-tos -m your-email@studentmail.ul.ie
-
-# Uncomment the 443 block and reload
-sudo nginx -t
-sudo systemctl reload nginx
+sudo mkdir -p /var/www/verify
+sudo cp verification/verify.html /var/www/verify/verify.html
 ```
 
-Certbot installs a systemd timer that renews automatically. Verify:
+---
+
+## 4. Test and reload nginx
 
 ```bash
-systemctl list-timers | grep certbot
-sudo certbot renew --dry-run
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
-## 4. Make sure Node is running on loopback
+---
 
-The nginx config proxies to `127.0.0.1:3000`. Confirm the Node app is bound
-there — in production it binds explicitly to `127.0.0.1` (see
-`backend/src/app.js`), so port 3000 is never exposed on a public interface.
-The firewall rules below are belt-and-braces on top of that.
+## 5. Make sure Node is running on loopback
+
+The nginx config proxies `/api/` to `127.0.0.1:3000`. Confirm Node is bound
+there:
 
 ```bash
-sudo ss -tlnp | grep 3000   # should show node listening
+sudo ss -tlnp | grep 3000   # should show node on 127.0.0.1:3000
 ```
 
-## 5. Firewall — close everything except 22/80/443
+---
 
-```bash
-sudo ufw allow OpenSSH
-sudo ufw allow 'Nginx Full'   # 80 + 443
-sudo ufw enable
-sudo ufw status
-```
-
-Port 3000 (Node) and 3306 (MySQL) are now unreachable from outside the VM.
-This is the architectural trust boundary — the only public surface is
-nginx :80 (redirect) and nginx :443 (TLS).
-
-## 6. Verify
-
-From your laptop:
-
-```bash
-# Cert is valid, chain resolves, modern TLS only
-curl -I https://zebra.theburkenator.com/api/health
-
-# HTTP redirects to HTTPS
-curl -I http://zebra.theburkenator.com/api/health   # expect 301
-
-# Test cert grade — should be A or A+
-# https://www.ssllabs.com/ssltest/analyze.html?d=zebra.theburkenator.com
-```
-
-## 7. Run Node under systemd (optional but recommended)
-
-Keep the Node app running across reboots:
+## 6. Run Node under systemd
 
 ```bash
 sudo tee /etc/systemd/system/secure-messenger.service >/dev/null <<'EOF'
@@ -117,22 +89,12 @@ After=network.target mysql.service
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/cs4455-epic/backend
-EnvironmentFile=/home/ubuntu/cs4455-epic/backend/.env
+User=student
+WorkingDirectory=/home/student/cs4455-epic/backend
+EnvironmentFile=/home/student/cs4455-epic/backend/.env
 ExecStart=/usr/bin/node src/app.js
 Restart=on-failure
 RestartSec=5
-
-# Hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/home/ubuntu/cs4455-epic/backend/logs
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
 
 [Install]
 WantedBy=multi-user.target
@@ -142,3 +104,62 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now secure-messenger
 sudo systemctl status secure-messenger
 ```
+
+> Adjust `User` and the two `/home/student/` paths if your VM username differs.
+
+---
+
+## 7. Firewall — close everything except 22 and 80
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx HTTP'   # port 80 only — 443 is handled at the gateway
+sudo ufw enable
+sudo ufw status
+```
+
+Port 3000 (Node) and 3306 (MySQL) are unreachable from outside the VM.
+The trust boundary is: gateway handles public TLS; nginx on :80 handles
+routing; Node and MySQL are loopback-only.
+
+---
+
+## 8. Verify
+
+From your laptop:
+
+```bash
+# Verification page loads
+curl -I https://zebra.theburkenator.com/
+
+# Backend health check
+curl https://zebra.theburkenator.com/api/health
+# → {"status":"ok","timestamp":"..."}
+```
+
+---
+
+## Security headers
+
+The VM sets the following headers (HSTS is set by the provider gateway):
+
+| Header | Value |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `no-referrer` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` |
+| `Content-Security-Policy` | scoped to `location /` (verification page only) |
+| `server_tokens` | `off` |
+
+---
+
+## Talking points for the interview
+
+| Question | Answer |
+|---|---|
+| "How is TLS handled?" | Terminated at the provider's gateway (TLS 1.2/1.3, A+ rated). The VM receives plain HTTP on port 80 over the internal network — standard reverse-proxy pattern. |
+| "Why no certbot on the VM?" | The provider manages certs and renewal centrally for all student subdomains via a wildcard/per-subdomain Let's Encrypt setup. Running certbot on the VM would conflict with that. |
+| "What's the trust boundary?" | The gateway is the public TLS endpoint. Everything past it (nginx → Node → MySQL) is internal. Node binds `127.0.0.1` in production; MySQL is `bind-address = 127.0.0.1`. Neither is reachable from outside the VM. |
+| "What security headers do you set?" | X-Content-Type-Options, X-Frame-Options DENY, Referrer-Policy no-referrer, Permissions-Policy, and a scoped CSP on the verification page. HSTS is set by the gateway. `server_tokens off` hides the nginx version. |
+| "Why no HSTS on the VM?" | HSTS must only be set by the entity terminating TLS. Since the gateway terminates TLS, it sets HSTS. Setting it on the VM (which speaks plain HTTP) would be incorrect. |
