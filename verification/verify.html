@@ -388,7 +388,8 @@
     // Replace with YOUR deployed address after deploying MessageDigest.sol to
     // Sepolia (contracts/DEPLOY.md). Keep in sync with
     // contracts/deployments/sepolia.json and backend/.env CONTRACT_ADDRESS.
-    const CONTRACT_ADDRESS = "0x230Ce7b063DCFE8fd79e3f07B3403b59a6750b8f";
+    // This is the messageId-keyed MessageDigest deployment.
+    const CONTRACT_ADDRESS = "0x0a66b77EC17A9b36D2A8a036eC080e2ff83A9328";
     const RPC_URLS = [
       "https://ethereum-sepolia-rpc.publicnode.com",
       "https://1rpc.io/sepolia",
@@ -397,8 +398,8 @@
     // ABI mirrors contracts/src/MessageDigest.sol — the contract the backend
     // actually writes to (BlockchainService.recordHash).
     const ABI = [
-      "function recordHash(bytes32 digest)",
-      "function getRecord(bytes32 digest) view returns (uint256 timestamp, address recorder)",
+      "function recordHash(bytes32 digest, bytes32 messageId)",
+      "function getRecord(bytes32 messageId) view returns (bytes32 digest, uint256 timestamp, address recorder)",
       "event HashRecorded(bytes32 indexed digest, uint256 timestamp, address indexed recorder)",
     ];
     const iface = new ethers.Interface(ABI);

@@ -155,9 +155,11 @@ The server **does not** compute message digests. The client computes
 `keccak256(plaintext)` before encrypting and sends the resulting 32-byte
 hex string as the `digest` field of `POST /api/messages`. On `message:sent`,
 `BlockchainService` writes that digest to the `MessageDigest` contract on
-Sepolia via `contract.recordHash(digest)`, stores `(message_id, tx_hash,
-digest_hash)` in `blockchain_records`, and flips `messages.chain_status`
-to `recorded`.
+Sepolia via `contract.recordHash(digest, keccak256(messageId))`, stores
+`(message_id, tx_hash, digest_hash)` in `blockchain_records`, and flips
+`messages.chain_status` to `recorded`. The contract keys uniqueness on the
+messageId rather than the digest, so two messages with identical plaintext
+each anchor independently instead of the second reverting `AlreadyRecorded`.
 
 The contract source is at [`contracts/src/MessageDigest.sol`](../contracts/src/MessageDigest.sol);
 deployment instructions are at [`contracts/DEPLOY.md`](../contracts/DEPLOY.md);

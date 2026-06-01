@@ -24,12 +24,17 @@
 // factory closure so individual tests can program its resolve/reject behaviour
 // and assert how it was called.
 jest.mock('ethers', () => {
+  const crypto = require('crypto');
   const recordHash = jest.fn();
   return {
     ethers: {
       JsonRpcProvider: jest.fn(() => ({ _tag: 'provider' })),
       Wallet: jest.fn(() => ({ _tag: 'wallet' })),
       Contract: jest.fn(() => ({ recordHash })),
+      // Stand-in for ethers.id (keccak256 of a utf8 string). Real ethers uses
+      // keccak; the digest algorithm is irrelevant here — we only need a
+      // deterministic, collision-free string→bytes32 map for the messageId key.
+      id: jest.fn((s) => '0x' + crypto.createHash('sha256').update(String(s)).digest('hex')),
       // Test escape hatch — not part of the real ethers surface.
       _recordHash: recordHash,
     },
@@ -144,7 +149,34 @@ describe('BlockchainService', () => {
       await svc.recordDigest('msg-1', DIGEST);
 
       expect(recordHash).toHaveBeenCalledTimes(1);
-      expect(recordHash).toHaveBeenCalledWith(DIGEST);
+      // arg 0 is the untouched client digest; arg 1 is the messageId key.
+      expect(recordHash).toHaveBeenCalledWith(DIGEST, ethers.id('msg-1'));
+    });
+
+    test('passes keccak256(messageId) as the per-message uniqueness key (arg 1)', async () => {
+      withCreds();
+      chainSucceeds();
+      const { svc } = build();
+
+      await svc.recordDigest('msg-42', DIGEST);
+
+      expect(recordHash.mock.calls[0][1]).toBe(ethers.id('msg-42'));
+    });
+
+    test('two messages with the SAME digest anchor under DIFFERENT keys — no collision', async () => {
+      withCreds();
+      chainSucceeds();
+      const { svc } = build();
+
+      // Identical plaintext → identical digest, but distinct messageIds. The
+      // old digest-keyed contract would have reverted the second; the
+      // messageId key makes both writes independent.
+      await svc.recordDigest('msg-A', DIGEST);
+      await svc.recordDigest('msg-B', DIGEST);
+
+      expect(recordHash.mock.calls[0][0]).toBe(DIGEST);
+      expect(recordHash.mock.calls[1][0]).toBe(DIGEST);
+      expect(recordHash.mock.calls[0][1]).not.toBe(recordHash.mock.calls[1][1]);
     });
 
     test('awaits tx.wait() and persists receipt.hash as the txHash', async () => {

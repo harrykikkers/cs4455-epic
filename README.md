@@ -81,5 +81,5 @@ The verification page needs no build — open
 ## Deployed contract
 
 `MessageDigest` is live on **Sepolia** at
-[`0x230Ce7b063DCFE8fd79e3f07B3403b59a6750b8f`](https://sepolia.etherscan.io/address/0x230Ce7b063DCFE8fd79e3f07B3403b59a6750b8f).
+[`0x0a66b77EC17A9b36D2A8a036eC080e2ff83A9328`](https://sepolia.etherscan.io/address/0x0a66b77EC17A9b36D2A8a036eC080e2ff83A9328).
 Address and ABI are in [`contracts/deployments/sepolia.json`](contracts/deployments/sepolia.json).

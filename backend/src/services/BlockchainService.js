@@ -4,10 +4,12 @@
  * MessageDigest contract on Ethereum Sepolia.
  *
  * The digest is computed by the client (keccak256 of the plaintext) and
- * passed in by MessageService when a message is sent. This service does
- * not hash anything — it relays the commitment the client made, which is
- * what makes the on-chain record a proof of the plaintext rather than of
- * server-controlled ciphertext.
+ * passed in by MessageService when a message is sent. This service never
+ * hashes the message content — it relays the commitment the client made,
+ * which is what makes the on-chain record a proof of the plaintext rather
+ * than of server-controlled ciphertext. (It does derive a bytes32 key from
+ * the messageId for the contract's per-message uniqueness slot; that key is
+ * routing metadata, not the integrity digest.)
  *
  * On chain-write failure, the message row is flagged chain_status='failed'
  * so a future retry worker (or an operator) can pick it up. Delivery is
@@ -78,12 +80,17 @@ class BlockchainService {
    * The digest comes from the client — we do not recompute or validate it
    * against the ciphertext. The bytes32 type already enforces the 32-byte
    * length via ethers; malformed input throws before any tx is sent.
+   *
+   * The contract keys uniqueness on the messageId, not the digest, so two
+   * messages with identical plaintext each anchor independently instead of the
+   * second reverting AlreadyRecorded. We pass keccak256(messageId) as the
+   * bytes32 key (the UUID hashed into the 32-byte slot the contract expects).
    */
   async recordDigest(messageId, digestHash) {
     const contract = this._getContract();
     if (!contract) return null;
 
-    const tx = await contract.recordHash(digestHash);
+    const tx = await contract.recordHash(digestHash, ethers.id(messageId));
     const receipt = await tx.wait();
     const txHash = receipt.hash;
 

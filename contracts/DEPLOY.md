@@ -197,6 +197,6 @@ If you ever need to redeploy (e.g. you change the contract):
 |---|---|---|
 | MetaMask says "insufficient funds" | No Sepolia ETH | Faucet (step 0) |
 | `NotRecorder` revert when backend tries to write | Server wallet not allow-listed | Step 5 — `setRecorder(serverAddr, true)` |
-| `AlreadyRecorded` revert | Same digest submitted twice | Either de-duplicate client-side, or include `messageId` in the digest input so duplicates can't happen |
+| `AlreadyRecorded` revert | Same **messageId** anchored twice (a retry of an already-recorded message) | Expected idempotency guard, not an error — the message is already on-chain. The record is keyed by messageId, so identical plaintexts in *different* messages no longer collide. |
 | Etherscan verification fails: bytecode mismatch | Compiler version or optimiser settings differ between Remix and Etherscan | Re-check step 2 settings, redo step 6 |
 | Backend logs "Blockchain not configured — skipping chain writes" | `SEPOLIA_RPC_URL`, `SEPOLIA_PRIVATE_KEY`, or `CONTRACT_ADDRESS` missing from `.env` | Step 8 |
