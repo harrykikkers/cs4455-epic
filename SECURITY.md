@@ -314,13 +314,3 @@ for transparency:
    logged verbatim.
 3. **Remove the unused `TLS_CERT_PATH` / `TLS_KEY_PATH` variables** (TLS is
    terminated at nginx).
-
-Recently closed:
-
-- **JWT algorithm pinned** — `algorithm: 'HS256'` on sign,
-  `algorithms: ['HS256']` on verify (`AuthService.js`), closing the
-  `alg:none` / algorithm-confusion vector.
-- **`ciphertext` field length capped** explicitly in `validate.js`
-  (200 000-char upper bound).
-- **CSP tightened** to `default-src 'none'; frame-ancestors 'none'`
-  (`app.js`) — appropriate for a JSON-only API that serves no markup.
