@@ -3,8 +3,8 @@
   "chainId": 11155111,
   "address": "0x0a66b77EC17A9b36D2A8a036eC080e2ff83A9328",
   "deployTxHash": "",
-  "deployBlock": null,
-  "notes": "messageId-keyed MessageDigest.sol (recordHash takes (digest, messageId); uniqueness is per message, not per digest). Address above is the redeployed contract. deployTxHash/deployBlock are left blank — fill them from the deploy transaction if you want the metadata. The previous digest-keyed deployment was at 0x230Ce7b063DCFE8fd79e3f07B3403b59a6750b8f (tx 0x8257b585334c77f5a77ae29d00e8dad06886e0734b1603bb3892ab4f60bdce61, block 10963196, owner/deployer 0xe9c4035de02929d9a925979dc7c282626450646b); its old blockchain_records rows remain verifiable against that address. The ABI is hand-rolled from MessageDigest.sol; replace it with Remix's Compilation Details output for a byte-for-byte match (functionally identical either way).",
+  "deployBlock": 10970909,
+  "notes": "messageId-keyed MessageDigest.sol (recordHash takes (digest, messageId); uniqueness is per message, not per digest). Address above is the redeployed contract. deployTxHash is left blank — fill it from the deploy transaction if you want the metadata. The previous digest-keyed deployment was at 0x230Ce7b063DCFE8fd79e3f07B3403b59a6750b8f (tx 0x8257b585334c77f5a77ae29d00e8dad06886e0734b1603bb3892ab4f60bdce61, block 10963196, owner/deployer 0xe9c4035de02929d9a925979dc7c282626450646b); its old blockchain_records rows remain verifiable against that address. The ABI is hand-rolled from MessageDigest.sol; replace it with Remix's Compilation Details output for a byte-for-byte match (functionally identical either way).",
   "abi": [
     {
       "type": "constructor",
