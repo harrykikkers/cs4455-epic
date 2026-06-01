@@ -151,15 +151,3 @@ The VM sets the following headers (HSTS is set by the provider gateway):
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` |
 | `Content-Security-Policy` | scoped to `location /` (verification page only) |
 | `server_tokens` | `off` |
-
----
-
-## Talking points for the interview
-
-| Question | Answer |
-|---|---|
-| "How is TLS handled?" | Terminated at the provider's gateway (TLS 1.2/1.3, A+ rated). The VM receives plain HTTP on port 80 over the internal network — standard reverse-proxy pattern. |
-| "Why no certbot on the VM?" | The provider manages certs and renewal centrally for all student subdomains via a wildcard/per-subdomain Let's Encrypt setup. Running certbot on the VM would conflict with that. |
-| "What's the trust boundary?" | The gateway is the public TLS endpoint. Everything past it (nginx → Node → MySQL) is internal. Node binds `127.0.0.1` in production; MySQL is `bind-address = 127.0.0.1`. Neither is reachable from outside the VM. |
-| "What security headers do you set?" | X-Content-Type-Options, X-Frame-Options DENY, Referrer-Policy no-referrer, Permissions-Policy, and a scoped CSP on the verification page. HSTS is set by the gateway. `server_tokens off` hides the nginx version. |
-| "Why no HSTS on the VM?" | HSTS must only be set by the entity terminating TLS. Since the gateway terminates TLS, it sets HSTS. Setting it on the VM (which speaks plain HTTP) would be incorrect. |
