@@ -258,6 +258,13 @@ erDiagram
 
 DDL lives in [scripts/init-db.js](scripts/init-db.js).
 
+**Unique constraints not shown above** (Mermaid ER can't render composite uniques) — these enforce replay protection and key uniqueness:
+
+- `messages (recipient_id, nonce)` — server-side replay backstop
+- `message_shares (shared_with_id, nonce)` — replay backstop for forwards
+- `public_keys (user_id, key_type)` — one active key per type per user
+- `public_key_history (user_id, key_type, version)` — no duplicate versions in the audit trail
+
 ## Security Notes
 
 - The server **never** sees plaintext messages — only ciphertext
