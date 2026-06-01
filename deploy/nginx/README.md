@@ -142,16 +142,3 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now secure-messenger
 sudo systemctl status secure-messenger
 ```
-
----
-
-## Talking points for the interview
-
-| Question | Answer |
-|---|---|
-| "How is TLS handled?" | nginx terminates TLS 1.2/1.3 on :443 with a Let's Encrypt cert; proxies cleartext HTTP to Node on loopback :3000. |
-| "How do you verify the cert?" | Clients use OS / browser trust stores. nginx serves a full chain (`fullchain.pem`) including the Let's Encrypt R3 intermediate. OCSP stapling is enabled. |
-| "What's the trust boundary?" | The VM's network interface. Anything past nginx (Node, MySQL) is one trust domain on loopback. MySQL is `bind-address = 127.0.0.1`. |
-| "How are certs renewed?" | certbot's systemd timer renews ≥30 days before expiry; nginx is reloaded post-hook. |
-| "Why nginx and not Node-direct TLS?" | Operational: cert renewal without Node restarts, OCSP stapling, edge rate limiting, and HSTS at the edge. Node would have to manage all of that. |
-| "What security headers do you set?" | HSTS (2y, preload-eligible), X-Content-Type-Options, X-Frame-Options DENY, Referrer-Policy no-referrer. `server_tokens off` hides the nginx version. |
