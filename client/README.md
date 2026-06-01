@@ -17,10 +17,12 @@ users and confirming the server stores only opaque ciphertext.
 
 The auth and messaging flows go through the service layer: the login/register
 frames call `AuthService`, and the chat panel drives `MessageService` /
-`KeyService` for send, receive, and forward. The remaining read/state
-operations in `main_frame` (inbox/sent listing, delete, key lookups, password
-change) still issue HTTP requests directly — a pending tidy-up, not a
-correctness gap, since none of them touch plaintext or private keys.
+`KeyService` / `ChainService` for send, receive, forward, revoke, delete,
+inbox/sent listing, and password change. The only remaining direct calls are
+two non-mutating lookups — username → user-id resolution and key-history
+fetch — which `main_frame` reaches through a service's underlying API client
+rather than a dedicated service method. That's a minor tidy-up, not a
+correctness gap, since neither touches plaintext or private keys.
 
 ## Tech Stack
 
@@ -74,6 +76,7 @@ client/
 ├── src/                          # flat layout — modules below are top-level
 │   ├── __main__.py               # Entry point — launches the GUI
 │   ├── config.py                 # Env config (server URL, keystore path)
+│   ├── constants.py              # Shared constants (dev token, limits, formats)
 │   ├── session.py                # In-memory session state (JWT, current user)
 │   ├── errors.py                 # Custom exception hierarchy
 │   ├── api/                      # HTTP client — one module per route group
@@ -105,7 +108,9 @@ client/
 │       ├── inbox_frame.py        # (planned) message list, to be split out of main_frame
 │       ├── compose_frame.py      # (planned) compose, to be split out of main_frame
 │       ├── message_frame.py      # (planned) single-message view, to be split out of main_frame
-│       └── widgets.py            # (planned) shared UI components (status bar, key warning banner)
+│       ├── widgets.py            # (planned) shared UI components (status bar, key warning banner)
+│       ├── demo_data.py          # Canned conversations for the dev-login (test / test1234) bypass
+│       └── utils.py              # Shared UI helpers (time formatting, cache write, store-binary resolution)
 ├── tests/                        # pytest tests (integration — need a running backend)
 ├── .env.example                  # SERVER_URL, KEYSTORE_PATH, etc.
 ├── .gitignore

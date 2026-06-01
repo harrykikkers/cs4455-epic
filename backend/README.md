@@ -111,6 +111,7 @@ npm start
 | POST | `/api/auth/login` | No | Get JWT token |
 | PUT | `/api/auth/password` | Yes | Change password — body: `{ currentPassword, newPassword }` |
 | GET | `/api/auth/me` | Yes | Current user info |
+| GET | `/api/auth/user` | Yes | Resolve a username → user id (recipient lookup) — query `?username=` |
 | POST | `/api/messages` | Yes | Send encrypted message — body: `{ recipientId, ciphertext, nonce, signature, seqNo, digest }` where `signature` is the Ed25519 signature over the payload, `seqNo` is the per-recipient sequence number, and `digest` is the client-computed keccak256 of plaintext (0x + 64 hex). The protocol is static ECDH (no per-message encapsulated key) |
 | GET | `/api/messages/inbox` | Yes | List received messages |
 | GET | `/api/messages/sent` | Yes | List sent messages |
