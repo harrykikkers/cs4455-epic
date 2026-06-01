@@ -38,7 +38,7 @@ it on loopback.
 | **Backend server** | [`backend/README.md`](backend/README.md) | Node/Express + MySQL. Stores ciphertext, manages auth (JWT, Argon2id) and the public-key directory, anchors digests on-chain. |
 | **C++ message store** | [`message-store/`](message-store/README.md) | AES-256-GCM encrypted on-disk archive of downloaded messages, driven by a small CLI. |
 | **Smart contract** | [`contracts/`](contracts/DEPLOY.md) | `MessageDigest.sol`, deployed to Sepolia. Records and timestamps message digests. |
-| **Verification page** | [`verification/`](verification/README.md) | Standalone `verify.html` — anyone can confirm a message was anchored, given the plaintext and tx hash. No app or backend required. |
+| **Verification page** | [`verification/`](verification/verify.html) | Standalone `verify.html` — anyone can confirm a message was anchored, given the plaintext and tx hash. No app or backend required. |
 | **Deployment** | [`deploy/nginx/`](deploy/nginx/README.md) | nginx TLS-terminating reverse proxy with auto-renewing Let's Encrypt certs. |
 
 ## Security model
@@ -63,13 +63,20 @@ step by step in [`client/README.md`](client/README.md#crypto-layer).
 
 Each component runs independently; full setup lives in the linked READMEs.
 
-```bash
-# Backend (Node + MySQL)
-cd backend && npm install && npm run db:init && npm run dev
+A backend is deployed at **`https://zebra.theburkenator.com`**, and the
+client's [`.env.example`](client/.env.example) points at it by default — so to
+just use the app you only need the client below. Running your own backend is
+optional.
 
+```bash
 # Client (Python desktop app)
 cd client && python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]" && python src/__main__.py
+pip install -r requirements.txt        # or: pip install -e ".[dev]"
+cp .env.example .env                    # talk to the hosted backend
+python src/__main__.py
+
+# Backend (Node + MySQL) — only if self-hosting
+cd backend && npm install && npm run db:init && npm run dev
 
 # C++ message store
 cd message-store && cmake -B build && cmake --build build
