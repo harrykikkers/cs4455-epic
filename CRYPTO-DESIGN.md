@@ -99,16 +99,21 @@ Every primitive below is from a vetted library — `cryptography` (X25519, Ed255
 
 **Algorithm.** Argon2id (RFC 9106), the hybrid variant that combines Argon2i's side-channel resistance on the first pass with Argon2d's GPU/ASIC resistance thereafter. Chosen over PBKDF2/bcrypt because it is *memory-hard*: an attacker's cost scales with memory × time, neutralising the parallelism advantage of GPUs and custom hardware.
 
-**Two independent uses, two parameter sets** (domain-separated — §4.5):
+**Two independent uses, same Argon2 cost, domain-separated** (§4.5):
 
 | Use | Where | Parameters | Justification |
 |---|---|---|---|
 | Server-side verification of the login credential | `PasswordHasher.js` | `m = 64 MiB, t = 3, p = 4` | This is exactly the **second RECOMMENDED configuration in RFC 9106 §4**. The first option (2 GiB, t=1) is inappropriate for a server handling concurrent logins — 2 GiB per hash would exhaust memory under load — so the lower-memory recommended option is the correct choice for this deployment. |
-| Client-side derivation of the local key-encryption key (KEK) | `kdf.py` | `m = 19 MiB, t = 2, p = 1` _‹confirm against `kdf.py`›_ | A single derivation runs per unlock on one user's laptop, so latency, not throughput, is the constraint. These are the OWASP Password Storage Cheat Sheet minimum Argon2id parameters, appropriate for an interactive single-user unlock. |
+| Client-side derivation of the local key-encryption key (KEK) | `kdf.py` | `m = 64 MiB, t = 3, p = 4` | The same RFC 9106 §4 second-RECOMMENDED cost as the server. Re-using the high cost here is deliberate, not an oversight: this parameter set *is* the brute-force cost an attacker pays against a **stolen, locked keystore**, so a higher cost strengthens at-rest protection. Lowering it to the interactive-unlock minimum would only weaken that resistance. |
 
-The two parameter sets are intentionally distinct, satisfying the requirement that at-rest key protection use KDF parameters *separate* from server-side password verification.
+Both uses run Argon2id at the same cost, but they are **domain-separated** so the requirement that at-rest key protection be *separate* from server-side password verification is met by construction. The separation is achieved by two independent means, neither of which depends on the Argon2 cost:
 
-> _Implementation note: the values above are the source-of-truth constants in `PasswordHasher.js` and `kdf.py`. If those constants differ, update this table to match the code — the parameters you ship must equal the parameters you document._
+- **Distinct salts.** The KEK uses a random per-keystore salt (`os.urandom(16)`, stored in the keystore); the server credential uses a deterministic username-derived salt. Different salts make the two Argon2 outputs unrelated even before HKDF.
+- **Distinct HKDF `info` strings** (§3.2): `local-key-encrypt-v1` for the KEK, `server-auth-v1` for the credential.
+
+Consequently the value the server stores and the key that wraps the on-disk private keys are cryptographically independent — a breach of one reveals nothing about the other. The degenerate failure this requirement guards against (KEK *equal to* the transmitted credential) cannot occur here, because the salts and the `info` strings both differ.
+
+> _Implementation note: these are the source-of-truth constants in `PasswordHasher.js` / `backend/.env.example` (server) and `kdf.py` (client KEK); the table reflects them exactly._
 
 ### 3.2 HKDF-SHA256 — key derivation and domain separation
 
@@ -120,7 +125,7 @@ The two parameter sets are intentionally distinct, satisfying the requirement th
 - `"local-key-encrypt-v1"` → local KEK (wraps private keys at rest)
 - `"server-auth-v1"` → server login credential (with a username-derived salt)
 
-This guarantees, for example, that the credential transmitted to the server is cryptographically unrelated to the key that protects the private keys on disk — a leak of one reveals nothing about the other. Salt usage follows RFC 5869 §3.1 _‹confirm the message-key Extract salt in `kdf.py`: empty salt (RFC 5869 §3.1 permits this when the IKM already has sufficient entropy, as a DH output does) or a fixed context string›_.
+This guarantees, for example, that the credential transmitted to the server is cryptographically unrelated to the key that protects the private keys on disk — a leak of one reveals nothing about the other. The message-key derivation (§3.3) uses **HKDF-Expand directly** on the X25519 shared secret with no Extract step and no salt: RFC 5869 §3.1 permits omitting Extract when the input keying material is already uniformly random, which a Curve25519 DH output is, so the `info` string alone carries the domain separation. The KEK and server-credential derivations differ instead in their Argon2 *salt* (random per-keystore vs. username-derived), as described in §3.1.
 
 ### 3.3 X25519 — key agreement
 
@@ -246,16 +251,18 @@ Long-term private keys are never stored in the clear. They are sealed under a KE
 
 ```mermaid
 flowchart TD
-    P["User password"] --> AR["Argon2id (m,t,p tuned for client)"]
-    AR --> M["high-entropy keying material"]
-    M -->|HKDF info=local-key-encrypt-v1| KEK["KEK (in memory only)"]
-    M -->|HKDF info=server-auth-v1, salt=username| CRED["server login credential → TLS → server"]
+    P["User password"] --> ARK["Argon2id (64 MiB, t=3, p=4)<br/>salt = random per-keystore"]
+    P --> ARC["Argon2id (64 MiB, t=3, p=4)<br/>salt = username-derived"]
+    ARK --> MK["keying material (KEK)"]
+    ARC --> MC["keying material (credential)"]
+    MK -->|HKDF info=local-key-encrypt-v1| KEK["KEK (in memory only)"]
+    MC -->|HKDF info=server-auth-v1| CRED["server login credential → TLS → server"]
     SK["X25519 + Ed25519 private keys"] --> WRAP["AES-256-GCM Seal under KEK"]
     KEK --> WRAP
     WRAP --> DISK[("Encrypted keystore on disk")]
 ```
 
-A password change re-derives the KEK and re-wraps the private-key blob, so keys remain accessible without ever being written in the clear. Because the KEK derivation uses a different `info` string (and parameters) from the server credential, an attacker who steals the on-disk keystore gains nothing usable without the password, and the value the server stores is cryptographically unrelated to the KEK. This satisfies the requirement that locally stored private keys be encrypted at rest under a separately derived key — a stolen, locked device does not yield the private keys.
+A password change re-derives the KEK and re-wraps the private-key blob, so keys remain accessible without ever being written in the clear. Because the KEK derivation uses a different salt and a different HKDF `info` string from the server credential (§3.1), an attacker who steals the on-disk keystore gains nothing usable without the password, and the value the server stores is cryptographically unrelated to the KEK. This satisfies the requirement that locally stored private keys be encrypted at rest under a separately derived key — a stolen, locked device does not yield the private keys.
 
 ---
 
