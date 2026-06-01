@@ -40,7 +40,21 @@ async function bootstrap() {
   // Security Middleware
   // Helmet sets secure HTTP headers (X-Content-Type-Options,
   // X-Frame-Options, Strict-Transport-Security, etc.)
-  app.use(helmet());
+  //
+  // This service only ever returns JSON — it serves no HTML, scripts, styles,
+  // images, or frames — so the CSP is locked all the way down to
+  // `default-src 'none'`. Every fetch directive falls back to default-src, so
+  // a single 'none' covers script/img/connect/etc. `frame-ancestors` does not
+  // fall back, so it is set explicitly to forbid the API being framed.
+  app.use(helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        'default-src': ["'none'"],
+        'frame-ancestors': ["'none'"],
+      },
+    },
+  }));
 
   // CORS — restrict to the configured origin in production, permissive in dev
   app.use(cors({

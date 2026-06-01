@@ -274,5 +274,8 @@ DDL lives in [scripts/init-db.js](scripts/init-db.js).
   [Authentication](#authentication)
 - All user input is validated and sanitised before processing
 - Rate limiting on auth endpoints prevents brute-force attacks
-- Helmet sets secure HTTP headers (HSTS, X-Frame-Options, etc.)
+- Helmet sets secure HTTP headers (HSTS, X-Frame-Options, and an explicit
+  `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` — this
+  is a JSON-only API that serves no markup)
+- JWTs are signed and verified with a pinned algorithm (HS256 on both sides)
 - SQL injection prevented via parameterised queries throughout

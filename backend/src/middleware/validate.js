@@ -24,6 +24,21 @@ function handleValidation(req, _res, next) {
 // so a leaked password_hash is not directly replayable.
 const AUTH_CREDENTIAL = /^[0-9a-f]{64}$/;
 
+// Explicit upper bound on the relayed AES-GCM ciphertext (base64). The whole
+// JSON body is already capped at 256 KB by express.json, but that ceiling is
+// shared with every other field; bounding ciphertext on its own rejects a
+// single oversized blob early and keeps the per-field limit auditable.
+// 200_000 base64 chars ≈ 150 KB of ciphertext, comfortably under the body cap.
+const MAX_CIPHERTEXT_LEN = 200000;
+
+function ciphertext(label = 'Ciphertext') {
+  return body('ciphertext')
+    .isString().withMessage('ciphertext must be a string')
+    .notEmpty().withMessage(`${label} required`)
+    .isLength({ max: MAX_CIPHERTEXT_LEN })
+    .withMessage(`ciphertext exceeds ${MAX_CIPHERTEXT_LEN}-char limit`);
+}
+
 function authCredential(field, label) {
   return body(field)
     .isString().withMessage(`${label} must be a string`)
@@ -57,7 +72,7 @@ const validate = {
 
   sendMessage: [
     body('recipientId').isUUID().withMessage('Valid recipient ID required'),
-    body('ciphertext').notEmpty().withMessage('Ciphertext required'),
+    ciphertext('Ciphertext'),
     // 12-byte AES-GCM IV, base64 → exactly 16 chars (CHAR(16) in schema).
     body('nonce')
       .isString().withMessage('nonce must be a string')
@@ -87,7 +102,7 @@ const validate = {
     // Ed25519-signs it, and supplies seq_no + digest. There is no enc field.
     param('id').isUUID().withMessage('Valid message ID required'),
     body('recipientId').isUUID().withMessage('Valid recipient ID required'),
-    body('ciphertext').notEmpty().withMessage('Re-encrypted ciphertext required'),
+    ciphertext('Re-encrypted ciphertext'),
     body('nonce')
       .isString().withMessage('nonce must be a string')
       .isLength({ min: 16, max: 16 }).withMessage('nonce must be exactly 16 chars (base64 of 12-byte IV)')

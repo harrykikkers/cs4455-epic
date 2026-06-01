@@ -96,7 +96,10 @@ class AuthService {
         pwdChangedAt: pwdChangedAtSeconds(user),
       },
       config.jwt.secret,
-      { expiresIn: config.jwt.expiresIn }
+      // Pin the signing algorithm. Without this the library picks HS256 by
+      // default, but stating it explicitly keeps sign/verify symmetric and
+      // documents the intent.
+      { expiresIn: config.jwt.expiresIn, algorithm: 'HS256' }
     );
 
     audit.info(`auth.login.success user=${user.username} userId=${user.user_id}`);
@@ -148,7 +151,11 @@ class AuthService {
     let decoded;
 
     try {
-      decoded = jwt.verify(token, config.jwt.secret);
+      // Allow-list HS256 only. This is what closes the `alg:none` /
+      // algorithm-confusion vector (F-04): a token whose header advertises
+      // `none`, RS256, or anything other than HS256 is rejected outright
+      // rather than relying on the library's default behaviour.
+      decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
     } catch (err) {
       audit.warn(`auth.token.rejected reason=${err.name}`);
       throw new UnauthorisedError('Invalid or expired token');

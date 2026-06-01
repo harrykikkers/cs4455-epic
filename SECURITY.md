@@ -40,7 +40,7 @@ them. See the Cryptographic Design Document for the formal threat model.
 | # | Control area | Status | Primary location |
 |---|--------------|--------|------------------|
 | 1 | Improper Input Validation | Implemented | `src/middleware/validate.js` |
-| 2 | Broken Authentication | Implemented (one activation step outstanding) | `src/services/AuthService.js`, `src/middleware/auth.js` |
+| 2 | Broken Authentication | Implemented | `src/services/AuthService.js`, `src/middleware/auth.js` |
 | 3 | Broken Access Control | Implemented | `src/services/MessageService.js`, `src/controllers/MessageController.js` |
 | 4 | Cryptographic Issues | Implemented | `src/services/PasswordHasher.js`, `src/services/AuthService.js`, client crypto layer |
 | 5 | Injection | Implemented | `src/repositories/*`, `src/middleware/validate.js` |
@@ -87,9 +87,9 @@ business logic, using `express-validator` chains defined in
 Validation failures are funnelled through `handleValidation`, which raises a
 single `BadRequestError` carrying the collected messages.
 
-**Residual risk:** the `ciphertext` field is validated as non-empty but has no
-explicit upper length bound (the whole-body cap is the only ceiling today).
-Tracked under planned hardening.
+The `ciphertext` field is validated as a non-empty string with an explicit
+upper bound of 200 000 base64 chars (≈150 KB) in `validate.js`, in addition to
+the shared 256 KB whole-body cap on the JSON parser.
 
 ## 2. Broken Authentication
 
@@ -130,18 +130,19 @@ limiter on `/api/auth/register` and a combined limiter on `/api/auth`
 ensures the limiter keys on the real client IP from `X-Forwarded-For` behind
 nginx rather than the proxy address.
 
-**Per-user lockout.** The infrastructure is in place — the `login_attempts`
-table (`scripts/init-db.js`, indexed on both `user_id` and `ip_address`), the
+**Per-user lockout.** Active and wired. The `login_attempts` table
+(`scripts/init-db.js`, indexed on both `user_id` and `ip_address`) backs a
 `LoginAttemptRepository` (`record`, `countRecentFailures`, `clearFailures`),
-and the lockout policy constants in `AuthService` (`LOCKOUT_MAX_FAILURES = 5`,
-`LOCKOUT_WINDOW_MS = 15 min`). Activating it is a single wiring step (pass the
-repository into `AuthService` and gate `login` on the failure count); until
-then the active online-guessing defence is the rate-limit layer above. Tracked
-under planned hardening.
+which `app.js` injects into `AuthService` as its third constructor argument.
+`login()` records every failure and, once `countRecentFailures()` reaches
+`LOCKOUT_MAX_FAILURES = 5` inside `LOCKOUT_WINDOW_MS = 15 min`, rejects with
+`401 Account temporarily locked — too many failed attempts`; a successful login
+calls `clearFailures()` to reset the streak. This sits underneath the IP-layer
+rate limiter above as a second, per-account online-guessing defence. The
+six-bad-logins test is enumerated as F-02 in [PENTEST.md](PENTEST.md).
 
-**Residual risk:** the JWT algorithm should be pinned explicitly (`HS256` on
-both sign and verify) to remove any `alg: none` / algorithm-confusion surface.
-Tracked under planned hardening.
+The JWT algorithm is pinned explicitly — `HS256` on both sign and verify
+(`AuthService.js`) — removing any `alg: none` / algorithm-confusion surface.
 
 ## 3. Broken Access Control
 
@@ -215,7 +216,9 @@ rejects a malformed digest before any transaction is sent.
 
 - **Security headers** via Helmet (`src/app.js`): HSTS, `X-Content-Type-Options:
   nosniff`, `X-Frame-Options` (Helmet's default is `SAMEORIGIN`; the nginx edge
-  sets `DENY`), `Referrer-Policy`, and the other Helmet defaults.
+  sets `DENY`), `Referrer-Policy`, and an explicit Content-Security-Policy locked
+  down to `default-src 'none'; frame-ancestors 'none'` — appropriate for a
+  JSON-only API that serves no markup, scripts, or frames.
 - **CORS** restricted to the configured origin in production and only the
   methods/headers the API uses (`src/app.js`).
 - **Error handling** (`src/middleware/errorHandler.js`): deliberate
@@ -236,11 +239,10 @@ rejects a malformed digest before any transaction is sent.
   address) are supplied via `.env`, which is git-ignored (`.gitignore`); none
   are committed to the repository.
 
-**Residual risk:** the Content-Security-Policy is the Helmet default rather than
-an explicit policy; for a pure JSON API an effective `default-src 'none'` should
-be set. The backend also listens over plain HTTP behind nginx (TLS terminated at
-the edge), and the unused `TLS_CERT_PATH` / `TLS_KEY_PATH` variables in
-`.env.example` should be removed or wired. Tracked under planned hardening.
+**Residual risk:** the backend listens over plain HTTP behind nginx (TLS
+terminated at the edge), and the unused `TLS_CERT_PATH` / `TLS_KEY_PATH`
+variables in `.env.example` should be removed or wired. Tracked under planned
+hardening.
 
 ## 7. Sensitive Data Exposure
 
@@ -306,14 +308,19 @@ negative-path flows are enumerated as `test.todo` cases and are being filled in.
 These are the items above that are not yet fully closed, gathered in one place
 for transparency:
 
-1. **Wire per-user lockout** — pass `LoginAttemptRepository` into `AuthService`
-   and gate `login` on `countRecentFailures` (infrastructure already exists).
-2. **Pin the JWT algorithm** — `algorithm: 'HS256'` on sign,
-   `algorithms: ['HS256']` on verify.
-3. **Cap the `ciphertext` field length** explicitly in `validate.js`.
-4. **Tighten CSP** to an explicit `default-src 'none'`, and remove the unused
-   `TLS_CERT_PATH` / `TLS_KEY_PATH` variables (TLS is terminated at nginx).
-5. **Username enumeration via register status code** — accepted trade-off,
+1. **Username enumeration via register status code** — accepted trade-off,
    documented and rate-limited.
-6. **Add a log-scrubbing regression test** asserting no sensitive field is ever
+2. **Add a log-scrubbing regression test** asserting no sensitive field is ever
    logged verbatim.
+3. **Remove the unused `TLS_CERT_PATH` / `TLS_KEY_PATH` variables** (TLS is
+   terminated at nginx).
+
+Recently closed:
+
+- **JWT algorithm pinned** — `algorithm: 'HS256'` on sign,
+  `algorithms: ['HS256']` on verify (`AuthService.js`), closing the
+  `alg:none` / algorithm-confusion vector.
+- **`ciphertext` field length capped** explicitly in `validate.js`
+  (200 000-char upper bound).
+- **CSP tightened** to `default-src 'none'; frame-ancestors 'none'`
+  (`app.js`) — appropriate for a JSON-only API that serves no markup.
