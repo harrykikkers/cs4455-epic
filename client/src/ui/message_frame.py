@@ -205,12 +205,23 @@ class MessageFrame:
             self._open_chat(self._active_peer)
             return
 
+        # Optimistic update — remove from local state immediately so the UI
+        # responds without waiting for the full inbox reload.
+        conv = self._conversations.get(self._active_peer)
+        if conv:
+            conv["messages"] = [
+                x for x in conv["messages"]
+                if x.get("messageId") != msg_id]
+        self._plaintext_cache.pop(msg_id, None)
+        self._open_chat(self._active_peer)
+
         def run():
             try:
                 self._svc.delete(msg_id)
-                self.app.after(0, self._load)
             except Exception as e:
                 self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
+            finally:
+                self.app.after(0, self._load)
         threading.Thread(target=run, daemon=True).start()
 
     def _show_msg_detail(self, m):
