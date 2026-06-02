@@ -26,5 +26,12 @@ print(raw.hex())
 
 print(f"\n--- Decrypted contents (via C++ binary) ---")
 env = {**os.environ, "MESSAGE_STORE_KEY": key_hex}
-subprocess.run([binary, "list", "--archive", archive], env=env)
+listing = subprocess.run([binary, "list", "--archive", archive], env=env, capture_output=True, text=True)
+print(listing.stdout)
+
+print(f"--- Plaintext of each message ---")
+for line in listing.stdout.strip().splitlines():
+    msg_id, sender, created = line.split("\t")
+    body = subprocess.run([binary, "get", "--archive", archive, "--id", msg_id], env=env, capture_output=True, text=True).stdout
+    print(f"[{created}] {sender}: {body}")
 
