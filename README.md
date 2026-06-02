@@ -8,18 +8,24 @@ Sepolia testnet so its integrity can be verified independently of the app.
 ## Architecture
 
 ```
-┌──────────────────────┐         HTTPS          ┌──────────────────────┐
-│  Python desktop client│ ───────────────────▶ │  nginx (TLS, :443)    │
-│  (all crypto, local)  │                        │  reverse proxy        │
+┌──────────────────────┐   HTTPS (TLS 1.2/3)   ┌──────────────────────┐
+│  Python desktop client│ ───────────────────▶ │  provider gateway     │
+│  (all crypto, local)  │                        │  terminates TLS (:443)│
 └──────────┬───────────┘                        └──────────┬───────────┘
-           │                                                │ loopback :3000
+           │                                      HTTP :80  │
            │ decrypted plaintext                            ▼
            ▼                                     ┌──────────────────────┐
-┌──────────────────────┐                         │  Node/Express backend │
-│  C++ message-store    │                         │  + MySQL (ciphertext) │
+┌──────────────────────┐                         │  nginx reverse proxy  │
+│  C++ message-store    │                         │  (VM, port 80)        │
 │  (encrypted archive)  │                         └──────────┬───────────┘
-└──────────────────────┘                                     │ keccak256 digest
+└──────────────────────┘                          loopback   │ :3000
                                                               ▼
+                                                 ┌──────────────────────┐
+                                                 │  Node/Express backend │
+                                                 │  + MySQL (ciphertext) │
+                                                 └──────────┬───────────┘
+                                                            │ keccak256 digest
+                                                            ▼
 ┌──────────────────────┐   plaintext + txHash    ┌──────────────────────┐
 │  verify.html          │ ◀───────────────────── │  Sepolia: MessageDigest│
 │  (standalone, no app) │                         │  contract             │
@@ -27,8 +33,9 @@ Sepolia testnet so its integrity can be verified independently of the app.
 ```
 
 The server never sees plaintext, private keys, or the user's cleartext
-password. The only public network surface is nginx; Node and MySQL live behind
-it on loopback.
+password. TLS is terminated at the hosting provider's gateway, which forwards
+plain HTTP to nginx on the VM (port 80); the public network surface is the
+gateway, and Node and MySQL live behind nginx on loopback.
 
 ## Components
 
@@ -39,7 +46,7 @@ it on loopback.
 | **C++ message store** | [`message-store/`](message-store/README.md) | AES-256-GCM encrypted on-disk archive of downloaded messages, driven by a small CLI. |
 | **Smart contract** | [`contracts/`](contracts/DEPLOY.md) | `MessageDigest.sol`, deployed to Sepolia. Records and timestamps message digests. |
 | **Verification page** | [`verification/`](verification/verify.html) | Standalone `verify.html` — anyone can confirm a message was anchored, given the plaintext and tx hash. No app or backend required. |
-| **Deployment** | [`deploy/nginx/`](deploy/nginx/README.md) | nginx TLS-terminating reverse proxy with auto-renewing Let's Encrypt certs. |
+| **Deployment** | [`deploy/nginx/`](deploy/nginx/README.md) | nginx reverse proxy on the VM (HTTP, port 80); TLS is terminated upstream at the hosting provider's gateway. |
 
 ## Security model
 
@@ -53,8 +60,9 @@ it on loopback.
   against an append-only server-side key history to detect substitution.
 - **On-chain integrity anchoring.** Each message's keccak256 digest is recorded
   on Sepolia and is verifiable from plaintext alone.
-- **Network trust boundary.** Only nginx :80/:443 are exposed; Node (:3000) and
-  MySQL (:3306) are loopback-only.
+- **Network trust boundary.** TLS terminates at the provider gateway, which
+  forwards HTTP to nginx on the VM's port 80; Node (:3000) and MySQL (:3306)
+  are loopback-only.
 
 See each component's README for details — the crypto protocol is documented
 step by step in [`client/README.md`](client/README.md#crypto-layer).

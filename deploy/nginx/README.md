@@ -109,10 +109,10 @@ sudo systemctl status secure-messenger
 
 ---
 
-## 7. Firewall — close everything except 22 and 80
+## 7. Firewall — close everything except SSH (2205) and HTTP (80)
 
 ```bash
-sudo ufw allow 2205/tcp
+sudo ufw allow 2205/tcp          # SSH (custom port — not the default 22)
 sudo ufw allow 'Nginx HTTP'
 sudo ufw enable
 sudo ufw status
