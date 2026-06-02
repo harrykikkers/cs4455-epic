@@ -8,7 +8,7 @@
 
 ## 1. Scope and system overview
 
-Zebra is an end-to-end encrypted messaging application. A user runs a local client (Python desktop app; a C++ utility maintains an encrypted local archive) that performs **all** cryptographic operations in-process. A Node.js/Express server backed by MySQL acts only as an untrusted relay and public-key directory: it stores and forwards ciphertext, but never holds any key capable of reading message content. Transport between client and server is protected by TLS 1.2/1.3 terminated at an nginx reverse proxy; the end-to-end (E2E) layer described here sits *underneath* TLS and does not depend on it for confidentiality of message content.
+Zebra is an end-to-end encrypted messaging application. A user runs a local client (Python desktop app; a C++ utility maintains an encrypted local archive) that performs **all** cryptographic operations in-process. A Node.js/Express server backed by MySQL acts only as an untrusted relay and public-key directory: it stores and forwards ciphertext, but never holds any key capable of reading message content. Transport between client and server is protected by TLS 1.2/1.3 terminated at the hosting provider's gateway (nginx on the VM listens on :80 only); the end-to-end (E2E) layer described here sits *underneath* TLS and does not depend on it for confidentiality of message content.
 
 Each user holds **two independent long-term keypairs**, generated client-side and never shared in private form:
 

@@ -48,6 +48,21 @@ message-store get  --archive <path> --id <id>
 message-store list --archive <path>
     Decrypts and prints one line per message:  <id>\t<sender>\t<created>
 
+message-store rekey --archive <path>
+    Re-encrypts the archive under a new key. Old key in MESSAGE_STORE_KEY,
+    new key in MESSAGE_STORE_NEW_KEY. No-op if no archive exists yet.
+    Used by the Python client after a password change (archive key is
+    HKDF-derived from the KEK, so a new password yields a new archive key).
+
+message-store verify --archive <path> --id <id> --url <backend-base-url> --token <jwt>
+    Loads the message body from the local encrypted archive, fetches its
+    blockchain chain proof from the backend over verified TLS
+    (CURLOPT_SSL_VERIFYPEER), and prints the on-chain digest and tx hash
+    for manual comparison.
+    Note: keccak256 auto-comparison is not yet implemented — OpenSSL EVP
+    uses NIST SHA3 padding, not Ethereum's Keccak padding. The JS
+    verification page (verify.html) performs the full check correctly.
+
 message-store view [path-to-messages.json]
     Legacy viewer: reads a ciphertext JSON cache (default ~/.zebra/messages.json)
     and prints a conversation summary.
@@ -55,11 +70,11 @@ message-store view [path-to-messages.json]
 
 ### Exit codes
 
-| Code | Meaning                                   |
-|------|-------------------------------------------|
-| 0    | success                                   |
-| 1    | other error / decryption (auth) failure   |
-| 2    | usage error or key error                  |
+| Code | Meaning                                                      |
+|------|--------------------------------------------------------------|
+| 0    | success                                                      |
+| 1    | other error / decryption (auth) failure / I/O error          |
+| 2    | usage error or key env var missing / invalid                 |
 | 3    | id not found (`get`)                       |
 
 ## Archive file format

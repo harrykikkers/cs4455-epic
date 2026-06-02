@@ -191,7 +191,7 @@ JSON encoding, status code → exception mapping) are hidden.
 | `GET /api/messages/sent` | `MessageAPI.sent()` | List of sent messages |
 | `GET /api/messages/:id/chain` | `MessageAPI.chain(message_id)` | `{ digest_hash, chain_status, tx_hash, recorded_at }` |
 | `POST /api/messages/:id/forward` | `MessageAPI.forward(message_id, recipient_id, ciphertext, nonce, signature, seq_no, digest)` | Re-sealed under new recipient (same envelope as a direct send) |
-| `POST /api/messages/:id/revoke` | `MessageAPI.revoke(message_id)` | Revoke shared access |
+| `POST /api/messages/:id/revoke` | `MessageAPI.revoke(message_id, user_id)` | Revoke shared access for a specific user |
 | `DELETE /api/messages/:id` | `MessageAPI.delete(message_id)` | Soft delete |
 | `POST /api/keys` | `KeyAPI.publish(public_key, key_type, acknowledge_rotation=False)` | Publish own public key |
 | `GET /api/keys/:user_id` | `KeyAPI.get(user_id)` | Single user's current key |

@@ -307,32 +307,10 @@ Restart the backend. On the first message send, you should see in the logs:
 INFO  [blockchain]  Blockchain digest recorded for message <uuid>: 0x<txhash>
 ```
 
-## 9. Smoke test
+If the server wallet isn't authorised, you'll see a `NotRecorder` revert —
+go back to step 5.
 
-```bash
-# 1. Send a message via the API (digest is whatever the client computes —
-#    here we use keccak256 of the literal string "test" for demonstration)
-curl -X POST https://zebra.theburkenator.com/api/messages \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "recipientId": "<some-user-uuid>",
-    "ciphertext":  "<some-base64-ciphertext>",
-    "nonce":       "<some-base64-nonce>",
-    "digest":      "0x9c22ff5f21f0b81b113e63f7db6da94fedef11b2119b4088b89664fb9a3cb658"
-  }'
-
-# 2. Fetch the chain proof for that message
-curl -H "Authorization: Bearer $TOKEN" \
-  https://zebra.theburkenator.com/api/messages/<message-id>/chain
-# → { data: { digestHash, chainStatus: "recorded", txHash, recordedAt } }
-
-# 3. Confirm on Sepolia Etherscan
-open https://sepolia.etherscan.io/tx/<txHash>
-# You should see the HashRecorded event with the same digest.
-```
-
-## 10. Rotating or redeploying
+## 9. Rotating or redeploying
 
 If you ever need to redeploy (e.g. you change the contract):
 
