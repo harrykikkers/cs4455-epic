@@ -42,17 +42,21 @@ void usage() {
         "  message-store verify --archive <path> --id <id> --url <backend-url> --token <jwt>\n"
         "\n"
         "key: 64 lowercase hex chars in env MESSAGE_STORE_KEY\n";
-}
+} // standard error stream for usage and error messages
 
 using Flags = std::map<std::string, std::string>;
 
 // Parse --flag value pairs from argv[start..argc).
-Flags parseFlags(int argc, char* argv[], int start) {
+Flags parseFlags(int argc, char* argv[], int start) 
+// argc is the no of command line arguments, 
+// argv is an array of those arguments as c strings
+{
     Flags flags;
     for (int i = start; i < argc; ++i) {
         std::string a = argv[i];
         if (a.rfind("--", 0) == 0) {
-            std::string name = a.substr(2);
+        // rfind searches for the substring "--" at the start (index 0)
+            std::string name = a.substr(2); // cuts off the leading "--" to get the flag name
             if (i + 1 >= argc) {
                 std::cerr << "[message-store] missing value for --" << name << "\n";
                 std::exit(EXIT_USAGE);
@@ -171,7 +175,7 @@ int cmdList(int argc, char* argv[]) {
         auto records = archive::load(path, key);
         for (const auto& r : records) {
             std::cout << r.id << '\t' << r.sender << '\t' << r.created << '\n';
-        }
+        } // prints one line per record
     } catch (const archive::ArchiveIOError& e) {
         std::cerr << "[message-store] I/O error: " << e.what() << "\n";
         return EXIT_OTHER;
@@ -207,7 +211,7 @@ int cmdRekey(int argc, char* argv[]) {
 
     std::ifstream probe(path, std::ios::binary);
     if (!probe.is_open()) return EXIT_OK;  // nothing archived yet
-    probe.close();
+    probe.close(); // probe is a file stream open to check if file exists
 
     try {
         auto records = archive::load(path, oldKey);
@@ -292,6 +296,7 @@ int cmdView(int argc, char* argv[]) {
 }
 
 // libcurl write callback — appends received bytes into a std::string.
+// libcurl calls thus every time it receives data from http response
 static size_t curlWrite(const char* ptr, size_t size, size_t nmemb, std::string* out) {
     out->append(ptr, size * nmemb);
     return size * nmemb;
@@ -339,7 +344,7 @@ int cmdVerify(int argc, char* argv[]) {
     const std::string url = baseUrl + "/api/messages/" + msgId + "/chain";
     std::string response;
 
-    CURL* curl = curl_easy_init();
+    CURL* curl = curl_easy_init(); // libcurl handle
     if (!curl) {
         std::cerr << "[message-store] curl_easy_init failed\n";
         return EXIT_OTHER;
@@ -356,9 +361,9 @@ int cmdVerify(int argc, char* argv[]) {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA,      &response);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L); // verify cert chain
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L); // verify hostname
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT,        10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT,        10L); // L = LONG INTEGER
 
-    CURLcode res = curl_easy_perform(curl);
+    CURLcode res = curl_easy_perform(curl); // performs the http get request
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 

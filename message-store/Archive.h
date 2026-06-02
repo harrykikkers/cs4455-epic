@@ -10,23 +10,28 @@
 //   AAD                 = the 6 magic bytes
 //   plaintext           = UTF-8 JSON array of {"id","sender","created","body"}
 
-#include <array>
-#include <cstdint>
-#include <stdexcept>
+#include <array> 
+#include <cstdint> // for guaranteed integer sizes
+#include <stdexcept> // for exceptions
 #include <string>
-#include <vector>
+#include <vector> 
 
+// everything is scoped to archive:: to avoid name collisions and clarify intent.
 namespace archive {
 
 // The 6 magic bytes that prefix every archive and serve as the GCM AAD.
+// ZBAR1 is used as an identifier and version
+// constexpr means its computed at compile time
 constexpr std::array<unsigned char, 6> kMagic = {'Z', 'B', 'A', 'R', '1', '\n'};
 constexpr size_t kKeyLen = 32;  // AES-256
 constexpr size_t kIvLen = 12;   // GCM nonce
 constexpr size_t kTagLen = 16;  // GCM tag
+// size, not integer so use size_t
 
 using AesKey  = std::array<unsigned char, kKeyLen>;
 using GcmIV   = std::array<unsigned char, kIvLen>;
 using ByteVec = std::vector<unsigned char>;
+// unsigned means no negative values
 
 // One archived message record. Mirrors the on-disk JSON object.
 struct Record {
@@ -39,7 +44,7 @@ struct Record {
 // Thrown for decrypt/auth failures and malformed archives. Maps to exit code 1.
 struct DecryptError : std::runtime_error {
     using std::runtime_error::runtime_error;
-};
+}; // inheritance from std::runtime_error
 
 // Thrown for I/O failures (file open, write, rename, RAND_bytes).
 // Kept separate from DecryptError so callers can distinguish crypto failures
