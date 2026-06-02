@@ -10,7 +10,6 @@ from session import Session
 from services.auth_service import AuthService
 from services.chain_service import ChainService
 from services.message_service import MessageService
-from ui.utils import _write_cache, _run_store_binary
 from ui.demo_data import DEMO_CONVERSATIONS
 from ui.compose_frame import ComposeFrame
 from ui.inbox_frame import InboxFrame
@@ -135,12 +134,11 @@ class MainFrame(InboxFrame, MessageFrame, ComposeFrame, Widgets,
         # Key warning banner (hidden by default)
         self._key_banner = ctk.CTkFrame(right, height=44, corner_radius=0,
                                         fg_color=("#7c2d12", "#7c2d12"))
-        self._key_banner_label = ctk.CTkLabel(
+        ctk.CTkLabel(
             self._key_banner,
             text="  Warning: This contact's encryption key has changed. Verify their identity.",
             font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#fbbf24", anchor="w")
-        self._key_banner_label.pack(side="left", fill="x", expand=True, padx=12)
+            text_color="#fbbf24", anchor="w").pack(side="left", fill="x", expand=True, padx=12)
         ctk.CTkButton(self._key_banner, text="Details", width=70, height=26,
                       fg_color="#991b1b", hover_color="#7f1d1d",
                       command=self._show_key_warning_details).pack(
@@ -192,8 +190,6 @@ class MainFrame(InboxFrame, MessageFrame, ComposeFrame, Widgets,
                 sent  = (self._svc.sent() or {}).get("data", [])
                 self._decrypt_inbox(inbox)
                 self._decrypt_sent(sent)
-                _write_cache(inbox, sent)
-                _run_store_binary()
                 if self._alive:
                     self.app.after(0, lambda i=inbox, s=sent: self._alive and self._populate(i, s))
             except NetworkError:
