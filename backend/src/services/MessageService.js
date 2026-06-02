@@ -144,6 +144,16 @@ class MessageService {
     }
     logger.info(`Message soft-deleted: ${messageId} by ${userId}`);
   }
+
+  async deleteShare(shareId, userId) {
+    const affected = await this._messageRepo.softDeleteShare(shareId, userId);
+    if (!affected) {
+      // Same reasoning as deleteMessage: don't distinguish "no such share"
+      // from "not yours" — that would let a caller probe for valid share IDs.
+      throw new NotFoundError('Message not found');
+    }
+    logger.info(`Forward deleted: ${shareId} by ${userId}`);
+  }
 }
 
 /**

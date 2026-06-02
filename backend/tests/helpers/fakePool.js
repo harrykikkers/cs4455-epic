@@ -389,6 +389,20 @@ function makeFakePool() {
       return [limitOffset(normalised, rows), []];
     }
 
+    // softDeleteShare: UPDATE message_shares SET revoked_at = NOW()
+    //                  WHERE id = ? AND shared_by_id = ? AND revoked_at IS NULL
+    // Must precede the generic revokeShare matcher below — both start with the
+    // same SET clause, but this one is scoped to the share id + forwarder.
+    if (/^UPDATE message_shares SET revoked_at = NOW\(\) WHERE id = \?/i.test(normalised)) {
+      const [shareId, sharedById] = params;
+      const s = messageShares.find((x) => x.id === shareId && x.shared_by_id === sharedById && x.revoked_at === null);
+      if (s) {
+        s.revoked_at = new Date();
+        return [{ affectedRows: 1 }, []];
+      }
+      return [{ affectedRows: 0 }, []];
+    }
+
     // revokeShare: UPDATE message_shares SET revoked_at = NOW() WHERE message_id = ? AND shared_with_id = ?
     if (/^UPDATE message_shares SET revoked_at = NOW\(\)/i.test(normalised)) {
       const [messageId, sharedWithId] = params;

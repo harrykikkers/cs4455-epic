@@ -111,6 +111,15 @@ class MessageController {
       next(err);
     }
   };
+
+  removeShare = async (req, res, next) => {
+    try {
+      await this._messageService.deleteShare(req.params.shareId, req.user.id);
+      res.json({ data: { message: 'Message deleted' } });
+    } catch (err) {
+      next(err);
+    }
+  };
 }
 
 module.exports = MessageController;

@@ -215,9 +215,18 @@ class MessageFrame:
         self._plaintext_cache.pop(msg_id, None)
         self._open_chat(self._active_peer)
 
+        # A forward is a share row whose `messageId` is the share id (with the
+        # original under `originalMessageId`), so it must be deleted through the
+        # share endpoint — the message-delete path only touches the messages
+        # table and would 404 a share id.
+        is_share = bool(m.get("shared")) or bool(m.get("originalMessageId"))
+
         def run():
             try:
-                self._svc.delete(msg_id)
+                if is_share:
+                    self._svc.delete_share(msg_id)
+                else:
+                    self._svc.delete(msg_id)
             except Exception as e:
                 self.app.after(0, lambda m=str(e): messagebox.showerror("Error", m))
             finally:
