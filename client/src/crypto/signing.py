@@ -7,6 +7,7 @@ it genuinely came from someone holding that private key (authenticity).
 
 from __future__ import annotations
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -40,5 +41,5 @@ def verify(payload: bytes, signature: bytes, ed25519_pub: bytes) -> bool:
     try:
         pub.verify(signature, payload)
         return True
-    except Exception:
+    except InvalidSignature:
         return False

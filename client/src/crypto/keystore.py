@@ -23,8 +23,8 @@ _AAD = b"zebra-keystore-v1"
 _CACHE_AAD = b"zebra-msgcache-v1"
 _ARCHIVE_INFO = b"zebra-msgarchive-v1"
 
-_b64e = lambda b: base64.b64encode(b).decode("ascii")
-# Converts raw bytes to a base64 string.
+def _b64e(b: bytes) -> str:
+    return base64.b64encode(b).decode("ascii")
 #  JSON can't store raw bytes, only strings.
 
 SALT_BYTES = 16       # 128-bit salt per RFC 9106

@@ -41,6 +41,13 @@ struct DecryptError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+// Thrown for I/O failures (file open, write, rename, RAND_bytes).
+// Kept separate from DecryptError so callers can distinguish crypto failures
+// from filesystem/OS failures.
+struct ArchiveIOError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 // Decode a 64-char lowercase-hex key into 32 raw bytes.
 // Throws std::invalid_argument if not exactly 64 hex chars.
 AesKey decodeHexKey(const std::string& hex);

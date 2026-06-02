@@ -127,6 +127,9 @@ int cmdAdd(int argc, char* argv[]) {
             records.push_back({id, sender, created, body});
         }
         archive::save(path, key, records);
+    } catch (const archive::ArchiveIOError& e) {
+        std::cerr << "[message-store] I/O error: " << e.what() << "\n";
+        return EXIT_OTHER;
     } catch (const archive::DecryptError& e) {
         std::cerr << "[message-store] " << e.what() << "\n";
         return EXIT_OTHER;
@@ -148,6 +151,9 @@ int cmdGet(int argc, char* argv[]) {
                 return EXIT_OK;
             }
         }
+    } catch (const archive::ArchiveIOError& e) {
+        std::cerr << "[message-store] I/O error: " << e.what() << "\n";
+        return EXIT_OTHER;
     } catch (const archive::DecryptError& e) {
         std::cerr << "[message-store] " << e.what() << "\n";
         return EXIT_OTHER;
@@ -166,6 +172,9 @@ int cmdList(int argc, char* argv[]) {
         for (const auto& r : records) {
             std::cout << r.id << '\t' << r.sender << '\t' << r.created << '\n';
         }
+    } catch (const archive::ArchiveIOError& e) {
+        std::cerr << "[message-store] I/O error: " << e.what() << "\n";
+        return EXIT_OTHER;
     } catch (const archive::DecryptError& e) {
         std::cerr << "[message-store] " << e.what() << "\n";
         return EXIT_OTHER;
@@ -203,6 +212,9 @@ int cmdRekey(int argc, char* argv[]) {
     try {
         auto records = archive::load(path, oldKey);
         archive::save(path, newKey, records);
+    } catch (const archive::ArchiveIOError& e) {
+        std::cerr << "[message-store] I/O error: " << e.what() << "\n";
+        return EXIT_OTHER;
     } catch (const archive::DecryptError& e) {
         std::cerr << "[message-store] " << e.what() << "\n";
         return EXIT_OTHER;

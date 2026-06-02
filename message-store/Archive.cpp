@@ -187,7 +187,7 @@ void save(const std::string& path, const AesKey& key, const std::vector<Record>&
     // Fresh random GcmIV on every write.
     GcmIV iv{};
     if (RAND_bytes(iv.data(), (int)iv.size()) != 1)
-        throw DecryptError("RAND_bytes failed for GcmIV");
+        throw ArchiveIOError("RAND_bytes failed for IV");
 
     unsigned char tag[kTagLen];
     ByteVec ciphertext = gcmEncrypt(key, iv, plaintext, tag);
@@ -204,7 +204,7 @@ void save(const std::string& path, const AesKey& key, const std::vector<Record>&
     std::string tmp = path + ".tmp";
     int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0)
-        throw DecryptError(std::string("cannot open temp file: ") + std::strerror(errno));
+        throw ArchiveIOError(std::string("cannot open temp file: ") + std::strerror(errno));
 
     size_t written = 0;
     while (written < blob.size()) {
@@ -213,18 +213,18 @@ void save(const std::string& path, const AesKey& key, const std::vector<Record>&
             int err = errno;
             ::close(fd);
             ::unlink(tmp.c_str());
-            throw DecryptError(std::string("write failed: ") + std::strerror(err));
+            throw ArchiveIOError(std::string("write failed: ") + std::strerror(err));
         }
         written += (size_t)n;
     }
     if (::fsync(fd) != 0) { /* best effort */ }
     if (::close(fd) != 0)
-        throw DecryptError(std::string("close failed: ") + std::strerror(errno));
+        throw ArchiveIOError(std::string("close failed: ") + std::strerror(errno));
 
     if (::rename(tmp.c_str(), path.c_str()) != 0) {
         int err = errno;
         ::unlink(tmp.c_str());
-        throw DecryptError(std::string("rename failed: ") + std::strerror(err));
+        throw ArchiveIOError(std::string("rename failed: ") + std::strerror(err));
     }
 }
 

@@ -19,7 +19,7 @@ class AuthController {
 
   login = async (req, res, next) => {
     try {
-      const result = await this._authService.login(req.body);
+      const result = await this._authService.login({ ...req.body, ipAddress: req.ip });
       res.json({ data: result });
     } catch (err) {
       next(err);

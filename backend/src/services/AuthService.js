@@ -47,7 +47,7 @@ class AuthService {
     return { userId, username };
   }
 
-  async login({ username, password }) {
+  async login({ username, password, ipAddress = 'unknown' }) {
     const user = await this._userRepo.findByUsername(username);
     if (!user) {
       // Burn time so missing-user latency matches verify() latency.
@@ -74,14 +74,14 @@ class AuthService {
     const valid = await this._passwordHasher.verify(password, user.password_hash);
     if (!valid) {
       if (this._loginAttempts) {
-        await this._loginAttempts.record({ userId: user.user_id, ipAddress: 'server', success: false });
+        await this._loginAttempts.record({ userId: user.user_id, ipAddress, success: false });
       }
       audit.warn(`auth.login.failure reason=bad_password user=${user.username} userId=${user.user_id}`);
       throw new UnauthorisedError('Invalid username or password');
     }
 
     if (this._loginAttempts) {
-      await this._loginAttempts.record({ userId: user.user_id, ipAddress: 'server', success: true });
+      await this._loginAttempts.record({ userId: user.user_id, ipAddress, success: true });
       await this._loginAttempts.clearFailures(user.user_id);
     }
 

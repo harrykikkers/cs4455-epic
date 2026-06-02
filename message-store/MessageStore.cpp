@@ -2,37 +2,35 @@
 #include <algorithm>
 #include <map>
 
-using namespace std;
-
 void MessageStore::add(const Message& m) {
     _messages.push_back(m);
 }
 
-vector<Message> MessageStore::inbox(const string& myUserId) const {
-    vector<Message> result;
-    copy_if(_messages.begin(), _messages.end(), back_inserter(result),
+std::vector<Message> MessageStore::inbox(const std::string& myUserId) const {
+    std::vector<Message> result;
+    std::copy_if(_messages.begin(), _messages.end(), std::back_inserter(result),
             [&](const Message& m) { return m.recipientId == myUserId; });
     return result;
 }
 
-vector<Conversation> MessageStore::conversations() const {
-    map<string, Conversation> convMap;
+std::vector<Conversation> MessageStore::conversations() const {
+    std::map<std::string, Conversation> convMap;
     for (const auto& m : _messages) {
         auto& conv = convMap[m.senderId];
         conv.peerId = m.senderId;
         conv.messages.push_back(m);
     }
-    vector<Conversation> result;
+    std::vector<Conversation> result;
     for (auto& [peerId, conv] : convMap) {
-        sort(conv.messages.begin(), conv.messages.end(),
+        std::sort(conv.messages.begin(), conv.messages.end(),
              [](const Message& a, const Message& b) { return a.createdAt < b.createdAt; });
-        result.push_back(move(conv));
+        result.push_back(std::move(conv));
     }
     return result;
 }
 
-const Message* MessageStore::findById(const string& id) const {
-    auto it = find_if(_messages.begin(), _messages.end(),
+const Message* MessageStore::findById(const std::string& id) const {
+    auto it = std::find_if(_messages.begin(), _messages.end(),
                       [&](const Message& m) { return m.id == id; });
     return it != _messages.end() ? &*it : nullptr;
 }
