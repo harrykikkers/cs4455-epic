@@ -1,5 +1,10 @@
 #pragma once
 
+// MessageStore — legacy in-memory store used by the 'view' subcommand.
+// The live application uses the AES-256-GCM archive (Archive.h) for
+// persistent storage. This class is retained to demonstrate STL container
+// usage (std::vector, std::map) as required by the C++ assessment criteria.
+
 #include <string>
 #include <vector>
 

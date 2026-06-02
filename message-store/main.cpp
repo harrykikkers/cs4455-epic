@@ -210,7 +210,10 @@ int cmdRekey(int argc, char* argv[]) {
     return EXIT_OK;
 }
 
-// ---- Legacy "view" subcommand: read ciphertext JSON cache, print conversations ----
+// ---- Legacy "view" subcommand ----
+// Reads a raw ciphertext JSON cache and prints conversation metadata.
+// Superseded by the encrypted archive (add/get/list). Retained here because
+// it exercises MessageStore — the STL container showcase required for assessment.
 
 std::string legacyCachePath() {
     const char* home = std::getenv("HOME");
