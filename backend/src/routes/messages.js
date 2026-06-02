@@ -15,6 +15,10 @@ function messageRoutes(messageController, authMw) {
   router.post('/:id/forward', validate.forwardMessage, messageController.forward);
   router.get('/:id/shares', messageController.shares);
   router.post('/:id/revoke', validate.revokeAccess, messageController.revoke);
+  // Delete a forward by its share id. Declared before DELETE /:id so the
+  // two-segment path isn't shadowed, and so a share id can never be treated
+  // as a message id (they live in different tables).
+  router.delete('/shares/:shareId', messageController.removeShare);
   router.delete('/:id', messageController.remove);
 
   return router;

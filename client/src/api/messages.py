@@ -70,3 +70,12 @@ class MessageAPI(BaseClient):
     def delete(self, message_id: str) -> Any:
         """DELETE /api/messages/:id — soft delete."""
         return self._delete(f"/api/messages/{message_id}")
+
+    def delete_share(self, share_id: str) -> Any:
+        """DELETE /api/messages/shares/:shareId — delete a forward by its share id.
+
+        A forward lives in a separate table keyed by its own share id (the
+        ``messageId`` the inbox/sent views expose for shares), so it can't be
+        removed through the message-delete path above.
+        """
+        return self._delete(f"/api/messages/shares/{share_id}")

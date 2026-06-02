@@ -269,10 +269,20 @@ class MainFrame(InboxFrame, MessageFrame, ComposeFrame, Widgets,
             if any(m.get("_key_warning") for m in data["messages"]):
                 data["key_warning"] = True
 
-        # Restore active peer if the backend doesn't have them yet
-        # (newly opened chat with no messages, or race with a just-sent message).
+        # Keep the active chat open even when the backend returns nothing for it
+        # (newly opened chat with no messages yet, or a race with a just-sent
+        # message). Restore only the conversation *shell* — never the stale
+        # message list. Resurrecting prev_active wholesale would bring back
+        # messages the server no longer returns (e.g. ones just deleted, or a
+        # forward whose original was deleted), so a manual refresh would never
+        # clear them. A just-sent message that races the poll lives in the
+        # plaintext cache and reappears on the next pass.
         if self._active_peer and self._active_peer not in self._conversations and prev_active:
-            self._conversations[self._active_peer] = prev_active
+            self._conversations[self._active_peer] = {
+                "name": prev_active.get("name", self._active_peer),
+                "messages": [],
+                "key_warning": prev_active.get("key_warning", False),
+            }
 
         self._rebuild_conv_list()
 

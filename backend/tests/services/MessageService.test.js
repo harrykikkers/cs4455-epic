@@ -418,6 +418,68 @@ describe('MessageService', () => {
     });
   });
 
+  describe('deleteShare — "Deleting a forward by its share id"', () => {
+    // Alice sends to Bob; Bob forwards to Carol. Returns the share id Bob owns.
+    async function seedShare() {
+      const ctx = build();
+      seedTrio(ctx.pool);
+      const { messageId } = await ctx.svc.sendMessage(sendPayload({ senderId: 'alice', recipientId: 'bob', nonce: 'n-delshare' }));
+      const { id: shareId } = await ctx.svc.forwardMessage({
+        messageId, forwarderId: 'bob', recipientId: 'carol',
+        ciphertext: 'ct', nonce: 'n-share-del', signature: 'sig', seqNo: 1, digest: '0x' + 'c'.repeat(64),
+      });
+      return { ...ctx, messageId, shareId };
+    }
+
+    test('the forwarder can delete their own forward — revoked_at is set', async () => {
+      const { svc, pool, shareId } = await seedShare();
+      await expect(svc.deleteShare(shareId, 'bob')).resolves.toBeUndefined();
+      expect(pool._messageSharesStore[0].revoked_at).toBeInstanceOf(Date);
+    });
+
+    test('deleting a forward removes it from the recipient\'s inbox and the forwarder\'s sent view', async () => {
+      const { svc, shareId } = await seedShare();
+      await svc.deleteShare(shareId, 'bob');
+      expect(await svc.getInbox('carol')).toHaveLength(0);
+      expect((await svc.getSent('bob')).filter((m) => m.shared)).toHaveLength(0);
+    });
+
+    test('a non-forwarder cannot delete the share — NotFoundError, and the row survives', async () => {
+      const { svc, pool, shareId } = await seedShare();
+      // Carol is the recipient of the forward, not its owner; Alice is the
+      // original sender but did not create this share. Neither can delete it.
+      await expect(svc.deleteShare(shareId, 'carol')).rejects.toThrow(NotFoundError);
+      await expect(svc.deleteShare(shareId, 'alice')).rejects.toThrow(NotFoundError);
+      expect(pool._messageSharesStore[0].revoked_at).toBeNull();
+    });
+
+    test('deleting a non-existent share id throws NotFoundError (no ID enumeration)', async () => {
+      const { svc } = await seedShare();
+      await expect(svc.deleteShare('made-up-share-id', 'bob')).rejects.toThrow(NotFoundError);
+    });
+
+    test('deleting the ORIGINAL cascades: a forward of it disappears too (self-forward to the same recipient)', async () => {
+      const ctx = build();
+      seedTrio(ctx.pool);
+      // Alice sends to Bob, then forwards that same message to Bob again.
+      const { messageId } = await ctx.svc.sendMessage(sendPayload({ senderId: 'alice', recipientId: 'bob', nonce: 'n-orig' }));
+      await ctx.svc.forwardMessage({
+        messageId, forwarderId: 'alice', recipientId: 'bob',
+        ciphertext: 'ct', nonce: 'n-selffwd', signature: 'sig', seqNo: 1, digest: '0x' + 'c'.repeat(64),
+      });
+      // Bob sees two: the direct message and the forward.
+      expect(await ctx.svc.getInbox('bob')).toHaveLength(2);
+
+      // Alice deletes only the ORIGINAL.
+      await ctx.svc.deleteMessage(messageId, 'alice');
+
+      // The forward, anchored to the now-deleted original, falls out of both
+      // Bob's inbox and Alice's sent view — no explicit share delete needed.
+      expect(await ctx.svc.getInbox('bob')).toHaveLength(0);
+      expect(await ctx.svc.getSent('alice')).toHaveLength(0);
+    });
+  });
+
   describe('getChainProof — blockchain verification endpoint', () => {
     test('rejects with ForbiddenError if the caller cannot read the underlying message (no leak via chain endpoint)', async () => {
       const { svc, pool } = build();

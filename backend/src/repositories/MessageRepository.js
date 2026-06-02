@@ -220,6 +220,23 @@ class MessageRepository {
       [messageId, sharedWithId]
     );
   }
+
+  /**
+   * Delete a single forward (share) the caller created, addressed by its own
+   * share id. Reuses the revoked_at column — a deleted forward and a revoked
+   * one are the same thing at the data level (the share is withdrawn from both
+   * the forwarder's sent view and the recipient's inbox). Scoped to
+   * shared_by_id so only the forwarder can remove their own forward; returns
+   * affectedRows so the caller can 404 a share that doesn't exist or isn't the
+   * caller's (same ID-probe-safe pattern as softDelete).
+   */
+  async softDeleteShare(shareId, userId) {
+    const [result] = await this._pool.execute(
+      'UPDATE message_shares SET revoked_at = NOW() WHERE id = ? AND shared_by_id = ? AND revoked_at IS NULL',
+      [shareId, userId]
+    );
+    return result.affectedRows;
+  }
 }
 
 module.exports = MessageRepository;

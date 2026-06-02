@@ -205,3 +205,6 @@ class MessageService:
 
     def delete(self, message_id: str):
         return self.api.delete(message_id)
+
+    def delete_share(self, share_id: str):
+        return self.api.delete_share(share_id)

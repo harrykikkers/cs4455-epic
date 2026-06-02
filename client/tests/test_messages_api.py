@@ -57,6 +57,32 @@ def test_forward_targets_the_given_message_id(api):
 
 
 @responses.activate
+def test_delete_targets_the_message_endpoint(api):
+    responses.add(responses.DELETE,
+                  f"https://test.local/api/messages/{MID}",
+                  json={"data": {"message": "Message deleted"}}, status=200)
+
+    api.delete(MID)
+
+    assert responses.calls[0].request.url.endswith(f"/api/messages/{MID}")
+
+
+@responses.activate
+def test_delete_share_targets_the_shares_endpoint(api):
+    # A forward must be deleted by its share id through the shares path — never
+    # the message-delete path, which only knows the messages table.
+    share_id = "share-abc"
+    responses.add(responses.DELETE,
+                  f"https://test.local/api/messages/shares/{share_id}",
+                  json={"data": {"message": "Message deleted"}}, status=200)
+
+    api.delete_share(share_id)
+
+    assert responses.calls[0].request.url.endswith(
+        f"/api/messages/shares/{share_id}")
+
+
+@responses.activate
 def test_send_body_has_no_enc(api):
     responses.add(responses.POST, "https://test.local/api/messages",
                   json={"data": {"messageId": "m1"}}, status=201)
