@@ -43,9 +43,11 @@ void usage() {
         "key: 64 lowercase hex chars in env MESSAGE_STORE_KEY\n";
 }
 
+using Flags = std::map<std::string, std::string>;
+
 // Parse --flag value pairs from argv[start..argc).
-std::map<std::string, std::string> parseFlags(int argc, char* argv[], int start) {
-    std::map<std::string, std::string> flags;
+Flags parseFlags(int argc, char* argv[], int start) {
+    Flags flags;
     for (int i = start; i < argc; ++i) {
         std::string a = argv[i];
         if (a.rfind("--", 0) == 0) {
@@ -63,7 +65,7 @@ std::map<std::string, std::string> parseFlags(int argc, char* argv[], int start)
     return flags;
 }
 
-std::string require(const std::map<std::string, std::string>& flags,
+std::string require(const Flags& flags,
                     const std::string& name) {
     auto it = flags.find(name);
     if (it == flags.end()) {
@@ -74,7 +76,7 @@ std::string require(const std::map<std::string, std::string>& flags,
 }
 
 // Read the entire archive key from the environment, validate, hex-decode.
-std::array<unsigned char, archive::kKeyLen> loadKeyOrDie() {
+archive::AesKey loadKeyOrDie() {
     const char* env = std::getenv("MESSAGE_STORE_KEY");
     if (!env || *env == '\0') {
         std::cerr << "[message-store] MESSAGE_STORE_KEY is not set\n";

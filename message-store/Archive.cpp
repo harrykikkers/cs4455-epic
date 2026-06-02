@@ -35,10 +35,10 @@ int hexNibble(char c) {
 }
 
 // AES-256-GCM encrypt. Returns ciphertext; fills `tag` (16 bytes).
-std::vector<unsigned char> gcmEncrypt(
-        const std::array<unsigned char, kKeyLen>& key,
-        const std::array<unsigned char, kIvLen>& iv,
-        const std::vector<unsigned char>& plaintext,
+ByteVec gcmEncrypt(
+        const AesKey& key,
+        const GcmIV& iv,
+        const ByteVec& plaintext,
         unsigned char tag[kTagLen]) {
     CipherCtx c;
     if (!c.ctx) throw DecryptError("EVP_CIPHER_CTX_new failed");
@@ -46,7 +46,7 @@ std::vector<unsigned char> gcmEncrypt(
     if (EVP_EncryptInit_ex(c.ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1)
         throw DecryptError("EncryptInit (cipher) failed");
     if (EVP_CIPHER_CTX_ctrl(c.ctx, EVP_CTRL_GCM_SET_IVLEN, kIvLen, nullptr) != 1)
-        throw DecryptError("set IV length failed");
+        throw DecryptError("set GcmIV length failed");
     if (EVP_EncryptInit_ex(c.ctx, nullptr, nullptr, key.data(), iv.data()) != 1)
         throw DecryptError("EncryptInit (key/iv) failed");
 
@@ -73,18 +73,18 @@ std::vector<unsigned char> gcmEncrypt(
 }
 
 // AES-256-GCM decrypt + authenticate. Throws DecryptError if the tag is wrong.
-std::vector<unsigned char> gcmDecrypt(
-        const std::array<unsigned char, kKeyLen>& key,
-        const std::array<unsigned char, kIvLen>& iv,
+ByteVec gcmDecrypt(
+        const AesKey& key,
+        const GcmIV& iv,
         const unsigned char tag[kTagLen],
-        const std::vector<unsigned char>& ciphertext) {
+        const ByteVec& ciphertext) {
     CipherCtx c;
     if (!c.ctx) throw DecryptError("EVP_CIPHER_CTX_new failed");
 
     if (EVP_DecryptInit_ex(c.ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1)
         throw DecryptError("DecryptInit (cipher) failed");
     if (EVP_CIPHER_CTX_ctrl(c.ctx, EVP_CTRL_GCM_SET_IVLEN, kIvLen, nullptr) != 1)
-        throw DecryptError("set IV length failed");
+        throw DecryptError("set GcmIV length failed");
     if (EVP_DecryptInit_ex(c.ctx, nullptr, nullptr, key.data(), iv.data()) != 1)
         throw DecryptError("DecryptInit (key/iv) failed");
 
@@ -114,10 +114,10 @@ std::vector<unsigned char> gcmDecrypt(
 
 }  // namespace
 
-std::array<unsigned char, kKeyLen> decodeHexKey(const std::string& hex) {
+AesKey decodeHexKey(const std::string& hex) {
     if (hex.size() != kKeyLen * 2)
         throw std::invalid_argument("key must be exactly 64 hex chars");
-    std::array<unsigned char, kKeyLen> key{};
+    AesKey key{};
     for (size_t i = 0; i < kKeyLen; ++i) {
         int hi = hexNibble(hex[2 * i]);
         int lo = hexNibble(hex[2 * i + 1]);
@@ -128,8 +128,7 @@ std::array<unsigned char, kKeyLen> decodeHexKey(const std::string& hex) {
     return key;
 }
 
-std::vector<Record> load(const std::string& path,
-                         const std::array<unsigned char, kKeyLen>& key) {
+std::vector<Record> load(const std::string& path, const AesKey& key) {
     std::ifstream f(path, std::ios::binary);
     if (!f.is_open()) return {};  // absent archive => empty array
 
@@ -142,13 +141,13 @@ std::vector<Record> load(const std::string& path,
     if (!std::equal(kMagic.begin(), kMagic.end(), raw.begin()))
         throw DecryptError("bad magic / not a ZBAR1 archive");
 
-    std::array<unsigned char, kIvLen> iv{};
+    GcmIV iv{};
     std::copy_n(raw.begin() + kMagic.size(), kIvLen, iv.begin());
     unsigned char tag[kTagLen];
     std::copy_n(raw.begin() + kMagic.size() + kIvLen, kTagLen, tag);
 
-    std::vector<unsigned char> ciphertext(raw.begin() + headerLen, raw.end());
-    std::vector<unsigned char> plaintext = gcmDecrypt(key, iv, tag, ciphertext);
+    ByteVec ciphertext(raw.begin() + headerLen, raw.end());
+    ByteVec plaintext = gcmDecrypt(key, iv, tag, ciphertext);
 
     json arr;
     try {
@@ -171,9 +170,7 @@ std::vector<Record> load(const std::string& path,
     return records;
 }
 
-void save(const std::string& path,
-          const std::array<unsigned char, kKeyLen>& key,
-          const std::vector<Record>& records) {
+void save(const std::string& path, const AesKey& key, const std::vector<Record>& records) {
     // Serialize to JSON plaintext.
     json arr = json::array();
     for (const auto& r : records) {
@@ -185,18 +182,18 @@ void save(const std::string& path,
         });
     }
     std::string jsonStr = arr.dump();
-    std::vector<unsigned char> plaintext(jsonStr.begin(), jsonStr.end());
+    ByteVec plaintext(jsonStr.begin(), jsonStr.end());
 
-    // Fresh random IV on every write.
-    std::array<unsigned char, kIvLen> iv{};
+    // Fresh random GcmIV on every write.
+    GcmIV iv{};
     if (RAND_bytes(iv.data(), (int)iv.size()) != 1)
-        throw DecryptError("RAND_bytes failed for IV");
+        throw DecryptError("RAND_bytes failed for GcmIV");
 
     unsigned char tag[kTagLen];
-    std::vector<unsigned char> ciphertext = gcmEncrypt(key, iv, plaintext, tag);
+    ByteVec ciphertext = gcmEncrypt(key, iv, plaintext, tag);
 
     // Assemble: magic | iv | tag | ciphertext.
-    std::vector<unsigned char> blob;
+    ByteVec blob;
     blob.reserve(kMagic.size() + kIvLen + kTagLen + ciphertext.size());
     blob.insert(blob.end(), kMagic.begin(), kMagic.end());
     blob.insert(blob.end(), iv.begin(), iv.end());
