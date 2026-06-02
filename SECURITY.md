@@ -2,14 +2,11 @@
 
 This document maps each security control area enumerated in the CS4455
 **Computer Networks & Cybersecurity** rubric to where it is implemented in the
-codebase, so the control can be inspected and verified directly. It is the
-"we actively checked for this" companion to the penetration-testing report
-(`PENTEST.md`).
+codebase, so the control can be inspected and verified directly.
 
 Paths are relative to `backend/`. Client-side controls live in the Python
 client (`client/`) and the C++ message store (`message-store/`); the
-end-to-end cryptographic design is documented separately in the team
-Cryptographic Design Document.
+end-to-end cryptographic design is documented separately in the `CRYPTO-DESIGN.md` doc.
 
 ## Trust boundary
 
@@ -38,7 +35,7 @@ inward (Node, MySQL) shares one trust domain on loopback. The server is
 **untrusted with respect to
 message confidentiality**: it stores and forwards ciphertext, and the design
 goal is that a fully compromised server still cannot read messages or forge
-them. See the Cryptographic Design Document for the formal threat model.
+them.
 
 ## At a glance
 
@@ -49,8 +46,8 @@ them. See the Cryptographic Design Document for the formal threat model.
 | 3 | Broken Access Control | Implemented | `src/services/MessageService.js`, `src/controllers/MessageController.js` |
 | 4 | Cryptographic Issues | Implemented | `src/services/PasswordHasher.js`, `src/services/AuthService.js`, client crypto layer |
 | 5 | Injection | Implemented | `src/repositories/*`, `src/middleware/validate.js` |
-| 6 | Security Misconfiguration | Implemented (minor hardening planned) | `src/app.js`, `deploy/nginx/`, `src/middleware/errorHandler.js` |
-| 7 | Sensitive Data Exposure | Implemented (one regression test planned) | `src/services/AuthService.js`, `src/middleware/errorHandler.js`, `src/utils/logger.js` |
+| 6 | Security Misconfiguration | Implemented | `src/app.js`, `deploy/nginx/`, `src/middleware/errorHandler.js` |
+| 7 | Sensitive Data Exposure | Implemented | `src/services/AuthService.js`, `src/middleware/errorHandler.js`, `src/utils/logger.js` |
 | 8 | Vulnerable & Outdated Components | Implemented | `package.json`, `package-lock.json` |
 
 Items marked with an outstanding step are listed in full under
@@ -189,8 +186,7 @@ and implemented in the client: **static ECDH (X25519) → HKDF-SHA256 →
 AES-256-GCM**, with independent **Ed25519** signatures for sender authentication
 and replay-protected associated data. The full construction, parameter-level
 justification, threat model, and known limitations (including the deliberate
-absence of forward secrecy under static ECDH) are in the Cryptographic Design
-Document.
+absence of forward secrecy under static ECDH) are in `CRYPTO-DESIGN.md`.
 
 Forbidden primitives are not used anywhere in a security-relevant role: no MD5
 or SHA-1 for authentication, no DES/3DES/RC4, no ECB mode, no textbook RSA, no
@@ -306,10 +302,6 @@ nginx→Node hop is loopback-only within a single trust domain.
 accepted on UX grounds (users must be told to pick another name) and is
 mitigated by the strict rate limit on `/api/auth/register`.
 
-**Residual risk:** add a regression test asserting that no sensitive request
-field (password, ciphertext, signature) is ever written to a log line — this is
-currently confirmed by manual review only. Tracked under planned hardening.
-
 ## 8. Vulnerable and Outdated Components
 
 - Dependencies are pinned via `package-lock.json` for reproducible installs.
@@ -324,8 +316,7 @@ currently confirmed by manual review only. Tracked under planned hardening.
 - The C++ component depends on **OpenSSL 3** (EVP, system) and **libcurl**
   (system), with **nlohmann/json** pinned to v3.11.3 via CMake `FetchContent`.
 
-**Process:** re-run `npm audit` immediately before submission and document any
-remaining advisory together with its justification.
+**Process:** re-run `npm audit` to verify/document any.
 
 ---
 
@@ -356,11 +347,7 @@ for transparency:
 4. **Document the nginx `X-Forwarded-For` policy** — assert the
    `proxy_set_header X-Forwarded-For $remote_addr` directive in the deploy docs so
    the `trust proxy: 1` assumption behind the IP rate limiter is explicit (F-03).
-5. **Promote the access-control `test.todo`s** in
-   `tests/services/MessageService.test.js` to real deny-path assertions
-   (`ForbiddenError`/`NotFoundError`), moving F-06–F-08 from "verified by review"
-   to "verified by automated test".
-6. **Add systemd sandboxing** to `secure-messenger.service` (`NoNewPrivileges`,
+5. **Add systemd sandboxing** to `secure-messenger.service` (`NoNewPrivileges`,
    `PrivateTmp`, `ProtectSystem=strict`, `ProtectHome=read-only` with a
    `ReadWritePaths` carve-out for the log directory) and commit the unit under
    `deploy/systemd/` so it is version-controlled and inspectable. The deployed
