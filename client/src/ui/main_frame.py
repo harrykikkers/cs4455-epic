@@ -13,7 +13,7 @@ from services.message_service import MessageService
 from ui.demo_data import DEMO_CONVERSATIONS
 from ui.compose_frame import ComposeFrame
 from ui.inbox_frame import InboxFrame
-from ui.message_frame import MessageFrame
+from ui.message_frame import MessageFrame, rekey_archive
 from ui.widgets import Widgets
 
 
@@ -515,6 +515,15 @@ class MainFrame(InboxFrame, MessageFrame, ComposeFrame, Widgets,
                         text=m, text_color="#ef4444"))
                     return
 
+                # Capture the archive key under the OLD KEK before re-wrapping —
+                # the archive key is HKDF(KEK), so it changes with the password
+                # and the existing .archive must be re-keyed (below) or it would
+                # fail GCM auth on the next Download.
+                try:
+                    old_arch_key = ks.archive_key_hex()
+                except Exception:
+                    old_arch_key = None
+
                 # Server is authoritative and already succeeded; now re-wrap the
                 # local keystore under the new password so private keys stay
                 # accessible on next unlock.
@@ -525,6 +534,18 @@ class MainFrame(InboxFrame, MessageFrame, ComposeFrame, Widgets,
                         text="Password changed on server but local key "
                              f"re-encryption failed — {m}", text_color="#ef4444"))
                     return
+
+                # Re-key the C++ local archive under the new KEK so previously
+                # downloaded messages stay readable. Non-fatal: login still
+                # proceeds, but warn so the user knows a missing binary / failure
+                # leaves old downloads unreadable until re-downloaded.
+                try:
+                    new_arch_key = ks.archive_key_hex()
+                    rekey_archive(ks.archive_path(), old_arch_key, new_arch_key)
+                except Exception as e:
+                    self.app.after(0, lambda m=str(e): status.configure(
+                        text="Password changed, but the local message archive "
+                             f"could not be re-keyed — {m}", text_color="#f59e0b"))
 
                 # The change invalidated the current JWT server-side, so the
                 # session is dead — force a re-login with the new password.

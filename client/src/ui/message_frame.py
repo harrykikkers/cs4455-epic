@@ -26,6 +26,40 @@ from errors import ClientError, NetworkError, NotFoundError, RateLimitError
 from ui.utils import _format_time, resolve_store_binary
 
 
+def rekey_archive(archive_path: str, old_key_hex: str, new_key_hex: str) -> None:
+    """Re-encrypt the C++ local message archive under a new archive key.
+
+    Called after a password change: the archive key is HKDF(KEK) (see
+    ``Keystore.archive_key``), so a new password yields a new archive key and
+    the old ``.archive`` would otherwise fail GCM authentication on the next
+    Download (``add`` loads the existing archive before appending). This shells
+    out to ``message-store rekey``, which decrypts with the old key and rewrites
+    under the new one — the format stays owned by the C++ binary.
+
+    No-op if the archive does not exist yet or the key is unchanged. Raises
+    ``RuntimeError`` if the binary is missing or the re-key fails.
+    """
+    if not archive_path or not os.path.exists(archive_path):
+        return  # nothing archived yet
+    if not old_key_hex or not new_key_hex or old_key_hex == new_key_hex:
+        return
+
+    binary = resolve_store_binary()
+    if binary is None:
+        raise RuntimeError(
+            "message-store binary not found — local archive was not re-keyed")
+
+    env = {**os.environ,
+           "MESSAGE_STORE_KEY": old_key_hex,
+           "MESSAGE_STORE_NEW_KEY": new_key_hex}
+    result = subprocess.run([binary, "rekey", "--archive", archive_path],
+                            env=env, capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            result.stderr.decode("utf-8", "replace").strip()
+            or f"message-store rekey exited with code {result.returncode}")
+
+
 class MessageFrame:
     def _make_msg_bubble(self, m):
         mine = m.get("_mine", False)

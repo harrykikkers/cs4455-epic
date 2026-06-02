@@ -37,6 +37,7 @@ void usage() {
         "  message-store add    --archive <path> --id <id> --sender <name> --created <iso8601>   (body on STDIN)\n"
         "  message-store get    --archive <path> --id <id>\n"
         "  message-store list   --archive <path>\n"
+        "  message-store rekey  --archive <path>   (old key in MESSAGE_STORE_KEY, new key in MESSAGE_STORE_NEW_KEY)\n"
         "  message-store view   [path-to-messages.json]\n"
         "  message-store verify --archive <path> --id <id> --url <backend-url> --token <jwt>\n"
         "\n"
@@ -165,6 +166,43 @@ int cmdList(int argc, char* argv[]) {
         for (const auto& r : records) {
             std::cout << r.id << '\t' << r.sender << '\t' << r.created << '\n';
         }
+    } catch (const archive::DecryptError& e) {
+        std::cerr << "[message-store] " << e.what() << "\n";
+        return EXIT_OTHER;
+    }
+    return EXIT_OK;
+}
+
+// Re-encrypt the archive under a new key. Used after a password change: the
+// archive key is HKDF(KEK), so a new password yields a new archive key and the
+// old file would otherwise fail GCM authentication on the next add/get. The old
+// key arrives in MESSAGE_STORE_KEY (via loadKeyOrDie), the new in
+// MESSAGE_STORE_NEW_KEY. No-op success if the archive does not exist yet.
+int cmdRekey(int argc, char* argv[]) {
+    auto flags = parseFlags(argc, argv, 2);
+    std::string path = require(flags, "archive");
+    auto oldKey = loadKeyOrDie();
+
+    const char* newEnv = std::getenv("MESSAGE_STORE_NEW_KEY");
+    if (!newEnv || *newEnv == '\0') {
+        std::cerr << "[message-store] MESSAGE_STORE_NEW_KEY is not set\n";
+        return EXIT_USAGE;
+    }
+    archive::AesKey newKey;
+    try {
+        newKey = archive::decodeHexKey(newEnv);
+    } catch (const std::invalid_argument& e) {
+        std::cerr << "[message-store] " << e.what() << "\n";
+        return EXIT_USAGE;
+    }
+
+    std::ifstream probe(path, std::ios::binary);
+    if (!probe.is_open()) return EXIT_OK;  // nothing archived yet
+    probe.close();
+
+    try {
+        auto records = archive::load(path, oldKey);
+        archive::save(path, newKey, records);
     } catch (const archive::DecryptError& e) {
         std::cerr << "[message-store] " << e.what() << "\n";
         return EXIT_OTHER;
@@ -362,6 +400,7 @@ int main(int argc, char* argv[]) {
     if (sub == "add")    return cmdAdd(argc, argv);
     if (sub == "get")    return cmdGet(argc, argv);
     if (sub == "list")   return cmdList(argc, argv);
+    if (sub == "rekey")  return cmdRekey(argc, argv);
     if (sub == "view")   return cmdView(argc, argv);
     if (sub == "verify") return cmdVerify(argc, argv);
 
