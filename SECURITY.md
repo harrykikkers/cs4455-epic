@@ -17,7 +17,10 @@ Cryptographic Design Document.
 [ Python client / C++ store ]      <- holds plaintext + private keys; trusted
             | HTTPS (TLS 1.2/1.3)
             v
-[ nginx :443 ]                     <- TLS termination, edge headers, HTTP->HTTPS
+[ Hosting provider gateway ]       <- terminates TLS (HTTPS), forwards plain HTTP
+            | HTTP
+            v
+[ nginx :80 ]                      <- reverse proxy, edge headers, rate limit, serves verify.html
             | loopback HTTP :3000
             v
 [ Express backend ]                <- relays ciphertext; NEVER sees plaintext
@@ -29,8 +32,10 @@ Cryptographic Design Document.
 [ Ethereum Sepolia RPC ]           <- receives keccak256 digests only
 ```
 
-The only public network surface is nginx. Everything past it (Node, MySQL)
-shares one trust domain on loopback. The server is **untrusted with respect to
+The public HTTPS surface is the hosting provider's gateway, which terminates TLS
+and forwards plain HTTP to nginx on the VM (port 80). Everything from nginx
+inward (Node, MySQL) shares one trust domain on loopback. The server is
+**untrusted with respect to
 message confidentiality**: it stores and forwards ciphertext, and the design
 goal is that a fully compromised server still cannot read messages or forge
 them. See the Cryptographic Design Document for the formal threat model.
@@ -79,10 +84,11 @@ business logic, using `express-validator` chains defined in
   field (`src/controllers/MessageController.js`), so a client cannot inject
   `senderId` — that value is always taken from the authenticated token
   (`req.user.id`), never from the body.
-- **Body size**: a fixed request-body limit on the JSON parser; oversized
-  bodies are rejected with `413 PAYLOAD_TOO_LARGE` before any handler runs
-  (`src/middleware/errorHandler.js`, `entity.too.large`). Malformed JSON is
-  rejected with `400 INVALID_JSON`.
+- **Body size**: capped at two layers — nginx rejects bodies over
+  `client_max_body_size 256k` at the edge (a `413` before the request ever
+  reaches Node), and the JSON parser enforces the same ceiling in-app, returning
+  `413 PAYLOAD_TOO_LARGE` via `src/middleware/errorHandler.js`
+  (`entity.too.large`). Malformed JSON is rejected with `400 INVALID_JSON`.
 
 Validation failures are funnelled through `handleValidation`, which raises a
 single `BadRequestError` carrying the collected messages.
@@ -215,22 +221,43 @@ rejects a malformed digest before any transaction is sent.
 ## 6. Security Misconfiguration
 
 - **Security headers** via Helmet (`src/app.js`): HSTS, `X-Content-Type-Options:
-  nosniff`, `X-Frame-Options` (Helmet's default is `SAMEORIGIN`; the nginx edge
-  sets `DENY`), `Referrer-Policy`, and an explicit Content-Security-Policy locked
-  down to `default-src 'none'; frame-ancestors 'none'` — appropriate for a
-  JSON-only API that serves no markup, scripts, or frames.
+  nosniff`, `X-Frame-Options`, `Referrer-Policy`, and an explicit
+  Content-Security-Policy locked down to `default-src 'none'; frame-ancestors
+  'none'` — appropriate for a JSON-only API that serves no markup, scripts, or
+  frames. Note: both Helmet and the nginx edge currently emit security headers,
+  which produces duplicates and one conflicting value (`X-Frame-Options:
+  SAMEORIGIN` from Helmet vs `DENY` from nginx). This is cosmetic — framing is
+  governed by the CSP `frame-ancestors 'none'` directive either way — but
+  deduplicating the two layers is tracked as planned hardening (F-12 in
+  `PENTEST.md`).
 - **CORS** restricted to the configured origin in production and only the
   methods/headers the API uses (`src/app.js`).
 - **Error handling** (`src/middleware/errorHandler.js`): deliberate
   (`AppError`) failures return structured JSON with a stable error code;
   unexpected errors return a generic `500 INTERNAL_ERROR` with **only** a
   request ID — the stack trace is logged server-side and never sent to the
-  client. Every response carries the per-request UUID stamped by
-  `src/middleware/requestId.js`, so a pentest finding can be traced to a single
-  server log line.
-- **Edge (nginx, `deploy/nginx/`)**: TLS 1.2/1.3 only with a Let's Encrypt
-  certificate and full chain, OCSP stapling, HTTP→HTTPS 301 redirect, HSTS at
-  the edge, and `server_tokens off` to hide the nginx version.
+  client. Every application-layer response carries the per-request UUID stamped
+  by `src/middleware/requestId.js`, so a pentest finding can be traced to a single
+  server log line. (Rate-limit `429`s from `express-rate-limit` and nginx-level
+  responses such as the edge `413` are emitted before this middleware and so
+  carry no request ID — see F-03/F-11 in `PENTEST.md`.)
+- **Edge (nginx, `deploy/nginx/`)**: TLS is **not** terminated here. The hosting
+  provider's gateway terminates HTTPS using provider-managed certificates for
+  `zebra.theburkenator.com` (issuance/renewal is the provider's responsibility,
+  outside the team's control) and forwards plain HTTP to nginx on port 80. On the
+  VM, nginx sets edge security headers (`X-Content-Type-Options`,
+  `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, plus a
+  page-specific CSP for the static `verify.html`), hides its version
+  (`server_tokens off`), caps request bodies (`client_max_body_size 256k`),
+  applies an IP-based request rate limit (`limit_req` zone at `10r/s`,
+  `burst=20 nodelay` → `503` on excess), and reverse-proxies `/api/` to the
+  loopback Node backend, overwriting `X-Forwarded-For` with the connecting peer
+  address.
+- **Transport security**: HTTPS at the public edge is provided by the hosting
+  provider's gateway (verified A+ live by `testssl.sh`, F-12 in `PENTEST.md`); the
+  team does not manage the certificate. `Strict-Transport-Security` is emitted by
+  the application via Helmet. The VM itself configures no certificate and no
+  HTTP→HTTPS redirect.
 - **Client TLS verification**: the Python client sets `requests`' `verify=True`
   unconditionally (`client/src/config.py:55` → `client/src/api/client.py:39`),
   so production traffic to `zebra.theburkenator.com` is fully validated — chain
@@ -239,17 +266,21 @@ rejects a malformed digest before any transaction is sent.
   disable it; local dev talks plain `http://localhost` (no TLS handshake, so the
   flag is a no-op there). There is no certificate pinning; trust rests on the
   system CA store.
-- **Network exposure**: MySQL is bound to `127.0.0.1` (loopback only); the only
-  public surface is nginx. Node runs under a hardened systemd unit
-  (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
-  restricted `ReadWritePaths`).
+- **Network exposure**: MySQL is bound to `127.0.0.1` (loopback only); the Node
+  backend binds `127.0.0.1:3000` and is reachable only through the nginx reverse
+  proxy. Node runs under systemd (`/etc/systemd/system/secure-messenger.service`)
+  as a non-root user (`student`), with secrets injected via `EnvironmentFile`
+  (`.env`) and `Restart=on-failure`. The unit does **not** currently apply systemd
+  sandboxing directives (`NoNewPrivileges`, `ProtectSystem`, etc.) — adding them is
+  listed under planned hardening.
 - **Secrets**: all secrets (DB credentials, JWT secret, Sepolia key, contract
   address) are supplied via `.env`, which is git-ignored (`.gitignore`); none
   are committed to the repository.
 
-**Residual risk:** the backend listens over plain HTTP behind nginx (TLS
-terminated at the edge) — accepted by design, since that hop is loopback-only
-within a single trust domain.
+**Residual risk:** both the VM's nginx and the Node backend speak plain HTTP; TLS
+is terminated upstream at the provider gateway. Accepted by design (and largely
+outside the team's control) — the gateway→nginx hop is provider-internal and the
+nginx→Node hop is loopback-only within a single trust domain.
 
 ## 7. Sensitive Data Exposure
 
@@ -316,6 +347,21 @@ These are the items above that are not yet fully closed, gathered in one place
 for transparency:
 
 1. **Username enumeration via register status code** — accepted trade-off,
-   documented and rate-limited.
+   documented and rate-limited (F-15).
 2. **Add a log-scrubbing regression test** asserting no sensitive field is ever
    logged verbatim.
+3. **Deduplicate security headers** across Helmet and the nginx edge — remove the
+   duplicated/conflicting `X-Frame-Options` so a single layer owns each header
+   (F-12).
+4. **Document the nginx `X-Forwarded-For` policy** — assert the
+   `proxy_set_header X-Forwarded-For $remote_addr` directive in the deploy docs so
+   the `trust proxy: 1` assumption behind the IP rate limiter is explicit (F-03).
+5. **Promote the access-control `test.todo`s** in
+   `tests/services/MessageService.test.js` to real deny-path assertions
+   (`ForbiddenError`/`NotFoundError`), moving F-06–F-08 from "verified by review"
+   to "verified by automated test".
+6. **Add systemd sandboxing** to `secure-messenger.service` (`NoNewPrivileges`,
+   `PrivateTmp`, `ProtectSystem=strict`, `ProtectHome=read-only` with a
+   `ReadWritePaths` carve-out for the log directory) and commit the unit under
+   `deploy/systemd/` so it is version-controlled and inspectable. The deployed
+   unit currently applies none of these.
