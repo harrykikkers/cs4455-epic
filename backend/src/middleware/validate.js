@@ -13,7 +13,7 @@ function handleValidation(req, _res, next) {
     const messages = errors.array().map((e) => e.msg);
     return next(new BadRequestError(messages.join('; ')));
   }
-  next();
+  next(); // proceed to the next middleware 
 }
 
 // The client never sends the cleartext password. It sends a 64-char lowercase
@@ -22,7 +22,7 @@ function handleValidation(req, _res, next) {
 // client-side; here we only check the credential's shape. AuthService still
 // salts and re-hashes this value with Argon2id (PasswordHasher) before storage,
 // so a leaked password_hash is not directly replayable.
-const AUTH_CREDENTIAL = /^[0-9a-f]{64}$/;
+const AUTH_CREDENTIAL = /^[0-9a-f]{64}$/; // regex
 
 // Explicit upper bound on the relayed AES-GCM ciphertext (base64). The whole
 // JSON body is already capped at 256 KB by express.json, but that ceiling is
@@ -152,7 +152,7 @@ const validate = {
     query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
     query('offset').optional().isInt({ min: 0 }).toInt(),
     handleValidation,
-  ],
+  ], // Validates the URL query params for pagination (e.g., ?limit=20&offset=40)
 
   lookupUser: [
     query('username')

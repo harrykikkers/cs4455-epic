@@ -5,7 +5,7 @@ function messageRoutes(messageController, authMw) {
   const router = Router();
 
   // All message routes require authentication
-  router.use(authMw);
+  router.use(authMw); // applies auth to every single route below it. 
 
   router.post('/', validate.sendMessage, messageController.send);
   router.get('/inbox', validate.pagination, messageController.inbox);

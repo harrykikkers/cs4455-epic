@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { createLogger, format, transports } = require('winston');
+const { createLogger, format, transports } = require('winston'); // logging library
 const config = require('../config');
 
 // Ensure log directory exists

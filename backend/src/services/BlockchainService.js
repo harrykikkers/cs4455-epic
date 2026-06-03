@@ -46,9 +46,9 @@ class BlockchainService {
       return null;
     }
 
-    this._provider = new ethers.JsonRpcProvider(rpcUrl);
-    this._wallet = new ethers.Wallet(privateKey, this._provider);
-    this._contract = new ethers.Contract(address, deployment.abi, this._wallet);
+    this._provider = new ethers.JsonRpcProvider(rpcUrl); // connects to sepolia node
+    this._wallet = new ethers.Wallet(privateKey, this._provider); // servers wallet
+    this._contract = new ethers.Contract(address, deployment.abi, this._wallet); // js object representing the deployed smart contract
     return this._contract;
   }
 

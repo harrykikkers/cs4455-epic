@@ -83,12 +83,12 @@ class MessageRepository {
 
   async findById(messageId) {
     const [rows] = await this._pool.execute(
-      `SELECT m.*, u.username AS sender_username
+      `SELECT m.*, u.username AS sender_username 
        FROM messages m
        JOIN users u ON u.user_id = m.sender_id
        WHERE m.message_id = ? AND m.deleted_at IS NULL`,
       [messageId]
-    );
+    ); // m.* is all message fields
     return rows[0] || null;
   }
 
@@ -97,7 +97,7 @@ class MessageRepository {
     // and req.query values arrive as strings when express-validator's .toInt()
     // doesn't fire (e.g. when the param is absent the destructured default
     // is a number, but a caller passing strings would break). Coerce here.
-    const lim = Number.parseInt(limit, 10);
+    const lim = Number.parseInt(limit, 10); // base 10 parsing (normal decimal numbers)
     const off = Number.parseInt(offset, 10);
     // mysql2 v3.x has a bug where LIMIT/OFFSET as bound parameters cause
     // "Incorrect arguments to mysqld_stmt_execute". They are already coerced
@@ -111,7 +111,7 @@ class MessageRepository {
        WHERE m.recipient_id = ? AND m.deleted_at IS NULL
        ORDER BY m.created_at DESC
        LIMIT ${lim} OFFSET ${off}`,
-      [recipientId]
+      [recipientId] 
     );
     return rows;
   }

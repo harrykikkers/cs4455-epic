@@ -4,12 +4,12 @@
  * This keeps HTTP status codes out of service/repository layers.
  */
 
-class AppError extends Error {
+class AppError extends Error { // extends is inheritance
   constructor(message, statusCode, code) {
     super(message);
     this.statusCode = statusCode;
     this.code = code;
-    this.isOperational = true;
+    this.isOperational = true; // expected/handled error
     Error.captureStackTrace(this, this.constructor);
   }
 }
@@ -51,4 +51,4 @@ module.exports = {
   ForbiddenError,
   NotFoundError,
   ConflictError,
-};
+}; // allows importing these classes in other files

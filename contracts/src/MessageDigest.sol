@@ -48,7 +48,7 @@ contract MessageDigest {
     }
 
     function getRecord(bytes32 messageId) external view returns (bytes32 digest, uint256 timestamp, address recorder) {
-        Record memory r = _records[messageId];
+        Record memory r = _records[messageId]; // memory lives for the function call only, storage is permanent
         return (r.digest, r.timestamp, r.recorder);
     }
 }

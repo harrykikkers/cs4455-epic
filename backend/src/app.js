@@ -46,7 +46,7 @@ async function bootstrap() {
   // `default-src 'none'`. Every fetch directive falls back to default-src, so
   // a single 'none' covers script/img/connect/etc. `frame-ancestors` does not
   // fall back, so it is set explicitly to forbid the API being framed.
-  app.use(helmet({
+  app.use(helmet({ // helmet automatically sets secure HTTP response headers.
     contentSecurityPolicy: {
       useDefaults: false,
       directives: {

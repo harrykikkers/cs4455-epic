@@ -59,6 +59,7 @@ class MessageService {
     const direct = (await this._messageRepo.findByRecipient(userId, options)).map(toMessageDTO);
     const shared = (await this._messageRepo.findSharedWithUser(userId, options)).map(toSharedInboxDTO);
     return [...direct, ...shared].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    // ... merges two arrays into one
   }
 
   async getSent(userId, options) {
@@ -77,7 +78,7 @@ class MessageService {
     // mapped to the API shape below.
     if (message.sender_id !== userId && message.recipient_id !== userId) {
       const shares = await this._messageRepo.findSharedWith(messageId);
-      const isShared = shares.some((s) => s.shared_with_id === userId);
+      const isShared = shares.some((s) => s.shared_with_id === userId); // some loops through the array and returns true if at least one element matches the condition.
       if (!isShared) {
         throw new ForbiddenError('You do not have access to this message');
       }
@@ -163,7 +164,7 @@ class MessageService {
  * present on the row, so it serves the inbox view (sender side), the sent
  * view (recipient side), and the full single-message view alike.
  */
-function toMessageDTO(row) {
+function toMessageDTO(row) { // data transfer object to convert from db shape to api shape
   const dto = {
     messageId: row.message_id,
     ciphertext: row.ciphertext,
