@@ -66,6 +66,7 @@ backend/
 ├── tests/                      # Jest test files
 ├── .env.example                # Environment variable template
 ├── .gitignore
+├── jest.config.js              # Jest configuration
 ├── package.json
 └── README.md
 ```
@@ -118,7 +119,9 @@ npm start
 | GET | `/api/messages/:id` | Yes | Get single message |
 | GET | `/api/messages/:id/chain` | Yes | Chain proof: `{ digestHash, chainStatus, txHash, recordedAt }` — feed `txHash` into the standalone verification page |
 | POST | `/api/messages/:id/forward` | Yes | Forward to another user — body: `{ recipientId, ciphertext, nonce, signature, seqNo, digest }` (re-sealed under the new recipient's pinned key, same envelope as a direct send) |
+| GET | `/api/messages/:id/shares` | Yes | List a message's forwarded shares |
 | POST | `/api/messages/:id/revoke` | Yes | Revoke shared access |
+| DELETE | `/api/messages/shares/:shareId` | Yes | Delete a forward by its share id (distinct from soft-deleting a message — shares live in their own table) |
 | DELETE | `/api/messages/:id` | Yes | Soft-delete message |
 | POST | `/api/keys` | Yes | Publish public key — body: `{ publicKey, keyType, acknowledgeRotation? }` |
 | GET | `/api/keys` | Yes | List all public keys |

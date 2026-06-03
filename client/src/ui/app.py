@@ -5,7 +5,6 @@ from .login_frame import LoginFrame
 from .register_frame import RegisterFrame
 from .main_frame import MainFrame
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # CustomTkinter theme (kept here so config.py stays GUI-free).
 ctk.set_appearance_mode("dark")
