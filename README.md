@@ -64,8 +64,7 @@ gateway, and Node and MySQL live behind nginx on loopback.
   forwards HTTP to nginx on the VM's port 80; Node (:3000) and MySQL (:3306)
   are loopback-only.
 
-See each component's README for details — the crypto protocol is documented
-step by step in [`client/README.md`](client/README.md#crypto-layer).
+See each component's README for details.
 
 ## Quick start
 
