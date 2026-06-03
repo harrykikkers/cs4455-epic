@@ -30,7 +30,7 @@ ct  = AES-256-GCM-Seal( K, n, plaintext, AAD )
 d   = keccak256( plaintext )      // anchored on-chain, separate subsystem
 ```
 
-The server receives only `(idB, ct, n, σ, seq, d)`. It can read none of the plaintext and can alter nothing without invalidating `σ`.
+The server receives only `(idA, idB, ct, n, σ, seq, d)`. It can read none of the plaintext and can alter nothing without invalidating `σ`.
 
 This is an **equivalent justified construction** in the sense of the brief (HPKE Mode_Auth *or equivalent*): it reuses HPKE's DHKEM-style X25519 agreement and HKDF/AEAD building blocks, but replaces HPKE's implicit authentication and ephemeral KEM with an explicit Ed25519 signature over a static-DH channel. Section 5 maps exactly what is retained, simplified, and omitted relative to RFC 9180.
 
@@ -47,7 +47,7 @@ We analyse four attacker classes. For each we state which security properties ho
 | Content confidentiality | ✅ | TLS on the wire; E2E AES-256-GCM beneath it (defence in depth) |
 | Integrity / sender auth | ✅ | TLS record MAC; Ed25519 beneath it |
 | Metadata privacy | ✅ (on-wire) | TLS hides application data; only coarse traffic analysis (record sizes/timing) remains |
-| Forward secrecy | — | Not relevant to a pure eavesdropper; see §2.4 |
+| Forward secrecy | ❌ | Fails for the same reason as §2.4: an eavesdropper who archives wire traffic can retroactively decrypt upon future key compromise |
 
 A passive attacker who could strip TLS would still see only ciphertext and signatures (never plaintext), but would gain message metadata. TLS is therefore the primary defence here and the E2E layer is the backstop.
 
@@ -171,7 +171,7 @@ sequenceDiagram
     C->>S: 6. POST /api/keys { x25519_pub, ed25519_pub }
 ```
 
-1. The client derives a 64-hex login credential from the password (Argon2id, then HKDF with `info = "server-auth-v1"`). The cleartext password never leaves the device; the credential is password-equivalent *in transit* and is protected by TLS.
+1. The client derives a 64-hex login credential from the password (Argon2id, then HKDF with `info = "server-auth-v1"`). The cleartext password never leaves the device; the credential is password-equivalent *in transit* and is protected by TLS. **If TLS were stripped or misconfigured, intercepting the credential would give an attacker full account access** — this is mitigated in deployment by HSTS enforced at the provider gateway, which prevents downgrade and ensures all connections are HTTPS.
 2. The credential — not the password — is sent to the server.
 3. The server re-hashes the received credential with Argon2id and its own per-user random salt before storage, so a database leak yields neither the password nor a value replayable against `/login`.
 4. The client generates both long-term keypairs from the CSPRNG.
