@@ -103,7 +103,7 @@ std::string readAllStdin() {
         data.append(buf, (size_t)std::cin.gcount());
     }
     return data;
-}
+} // buffered read that reads from standard input
 
 int cmdAdd(int argc, char* argv[]) {
     auto flags = parseFlags(argc, argv, 2);
