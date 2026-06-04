@@ -363,7 +363,7 @@ int cmdVerify(int argc, char* argv[]) {
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L); // verify hostname
     curl_easy_setopt(curl, CURLOPT_TIMEOUT,        10L); // L = LONG INTEGER
 
-    CURLcode res = curl_easy_perform(curl); // performs the http get request
+    CURLcode res = curl_easy_perform(curl); // http get request, opens tcp connection, resolves dns and does tls handshake
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
